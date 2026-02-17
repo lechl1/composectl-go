@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ .Title }}</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script>
+        // WebSocket connection for live reload
+        let ws;
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = protocol + '//' + window.location.host + '/ws';
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                console.log('WebSocket connected');
+            };
+
+            ws.onmessage = function(event) {
+                const msg = JSON.parse(event.data);
+                console.log('File change detected:', msg);
+
+                // Save current scroll position to session storage
+                sessionStorage.setItem('scrollX', window.scrollX.toString());
+                sessionStorage.setItem('scrollY', window.scrollY.toString());
+
+                // Reload the page
+                window.location.reload();
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
+
+            ws.onclose = function() {
+                console.log('WebSocket disconnected, reconnecting in 1s...');
+                setTimeout(connectWebSocket, 1000);
+            };
+        }
+
+        // Restore scroll position when DOM is ready
+        document.addEventListener('DOMContentLoaded', function() {
+            const scrollX = sessionStorage.getItem('scrollX');
+            const scrollY = sessionStorage.getItem('scrollY');
+
+            if (scrollX !== null && scrollY !== null) {
+                window.scrollTo(parseInt(scrollX), parseInt(scrollY));
+                console.log('Scroll position restored:', scrollX, scrollY);
+            }
+
+            // Connect to WebSocket
+            connectWebSocket();
+        });
+    </script>
+</head>
+<body class="bg-gray-800 text-white">
+<div class="flex flex-row">
+    <div class="flex flex-1/4">
+        {{ .stacknav }}
+    </div>
+    <div class="flex flex-3/4">
+        {{ .Body }}
+    </div>
+</div>
+</body>
+</html>
