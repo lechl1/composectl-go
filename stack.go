@@ -920,11 +920,26 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
+	// Validate YAML syntax before processing
+	var testCompose ComposeFile
+	if err := yaml.Unmarshal(body, &testCompose); err != nil {
+		log.Printf("Invalid YAML syntax for stack %s: %v", stackName, err)
+		http.Error(w, fmt.Sprintf("Invalid YAML syntax: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Validate that services section exists
+	if testCompose.Services == nil || len(testCompose.Services) == 0 {
+		log.Printf("No services defined in stack %s", stackName)
+		http.Error(w, "Invalid compose file: no services defined", http.StatusBadRequest)
+		return
+	}
+
 	// Parse and enrich the YAML with Traefik labels and auto-add undeclared networks/volumes
 	enrichedYAML, err := enrichComposeWithTraefikLabels(body)
 	if err != nil {
 		log.Printf("Error enriching compose file: %v", err)
-		http.Error(w, "Failed to process compose file", http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Failed to process compose file: %v", err), http.StatusBadRequest)
 		return
 	}
 
@@ -989,11 +1004,26 @@ func HandlePostStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate YAML syntax before processing
+	var testCompose ComposeFile
+	if err := yaml.Unmarshal([]byte(requestData.Content), &testCompose); err != nil {
+		log.Printf("Invalid YAML syntax for stack %s: %v", requestData.Name, err)
+		http.Error(w, fmt.Sprintf("Invalid YAML syntax: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Validate that services section exists
+	if testCompose.Services == nil || len(testCompose.Services) == 0 {
+		log.Printf("No services defined in stack %s", requestData.Name)
+		http.Error(w, "Invalid compose file: no services defined", http.StatusBadRequest)
+		return
+	}
+
 	// Parse and enrich the YAML with Traefik labels and auto-add undeclared networks/volumes
 	enrichedYAML, err := enrichComposeWithTraefikLabels([]byte(requestData.Content))
 	if err != nil {
 		log.Printf("Error enriching compose file: %v", err)
-		http.Error(w, "Failed to process compose file", http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Failed to process compose file: %v", err), http.StatusBadRequest)
 		return
 	}
 
