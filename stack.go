@@ -1424,6 +1424,55 @@ func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
 			service.Sysctls = sysctlsArray
 		}
 
+		// Automatically add homelab network if not present
+		hasHomelabNetwork := false
+		networksList := []string{}
+
+		// Parse existing networks
+		if service.Networks != nil {
+			switch v := service.Networks.(type) {
+			case []interface{}:
+				// Networks as array
+				for _, net := range v {
+					if netStr, ok := net.(string); ok {
+						networksList = append(networksList, netStr)
+						if netStr == "homelab" {
+							hasHomelabNetwork = true
+						}
+					}
+				}
+			case []string:
+				// Networks as string array
+				for _, netStr := range v {
+					networksList = append(networksList, netStr)
+					if netStr == "homelab" {
+						hasHomelabNetwork = true
+					}
+				}
+			case map[string]interface{}:
+				// Networks as map
+				for netName := range v {
+					networksList = append(networksList, netName)
+					if netName == "homelab" {
+						hasHomelabNetwork = true
+					}
+				}
+			case string:
+				// Single network as string
+				networksList = append(networksList, v)
+				if v == "homelab" {
+					hasHomelabNetwork = true
+				}
+			}
+		}
+
+		// Add homelab network if not present
+		if !hasHomelabNetwork {
+			networksList = append(networksList, "homelab")
+			service.Networks = networksList
+			log.Printf("Auto-added homelab network to service %s", serviceName)
+		}
+
 		compose.Services[serviceName] = service
 	}
 
