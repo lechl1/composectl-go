@@ -2138,8 +2138,8 @@ func enrichServices(compose *ComposeFile) {
 		}
 
 		if service.CPUs == nil {
-			service.CPUs = "0.2"
-			log.Printf("Auto-set cpus=0.2 for service %s", serviceName)
+			service.CPUs = "0.5"
+			log.Printf("Auto-set cpus=0.5 for service %s", serviceName)
 		}
 
 		compose.Services[serviceName] = service
