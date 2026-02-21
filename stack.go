@@ -76,6 +76,9 @@ type ComposeService struct {
 	CapAdd        []string               `yaml:"cap_add,omitempty"`
 	Sysctls       interface{}            `yaml:"sysctls,omitempty"` // Can be array or map
 	Secrets       []string               `yaml:"secrets,omitempty"`
+	MemLimit      string                 `yaml:"mem_limit,omitempty"`
+	MemswapLimit  int64                  `yaml:"memswap_limit,omitempty"`
+	CPUs          interface{}            `yaml:"cpus,omitempty"` // Can be string or number
 }
 
 // normalizeEnvironment converts environment variables from map or array format to array format
@@ -2108,6 +2111,22 @@ func enrichServices(compose *ComposeFile) {
 				service.ContainerName = imageName
 				log.Printf("Auto-set container_name=%s for service %s based on image %s", imageName, serviceName, service.Image)
 			}
+		}
+
+		// Add default resource limits if not specified
+		if service.MemLimit == "" {
+			service.MemLimit = "256m"
+			log.Printf("Auto-set mem_limit=256m for service %s", serviceName)
+		}
+
+		if service.MemswapLimit == 0 {
+			service.MemswapLimit = 0
+			log.Printf("Auto-set memswap_limit=0 for service %s", serviceName)
+		}
+
+		if service.CPUs == nil {
+			service.CPUs = "0.2"
+			log.Printf("Auto-set cpus=0.2 for service %s", serviceName)
 		}
 
 		compose.Services[serviceName] = service
