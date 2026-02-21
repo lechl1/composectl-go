@@ -2279,7 +2279,7 @@ func enrichServices(compose *ComposeFile) {
 			// Add standard Traefik labels if not present
 			traefikLabels := map[string]string{
 				"traefik.http.routers." + serviceName + ".entrypoints":                 "https",
-				"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${PUBLIC_DOMAIN_NAME}`) || Host(`%s.${PRIVATE_DOMAIN_NAME}`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
+				"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${PUBLIC_DOMAIN_NAME}`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
 				"traefik.http.routers." + serviceName + ".service":                     serviceName,
 				"traefik.http.routers." + serviceName + ".tls":                         "true",
 				"traefik.http.services." + serviceName + ".loadbalancer.server.port":   customPort,
@@ -2341,7 +2341,7 @@ func enrichServices(compose *ComposeFile) {
 
 				traefikLabels := map[string]string{
 					"traefik.http.routers." + serviceName + ".entrypoints":                 "https",
-					"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${PUBLIC_DOMAIN_NAME}`) || Host(`%s.${PRIVATE_DOMAIN_NAME}`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
+					"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${PUBLIC_DOMAIN_NAME}`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
 					"traefik.http.routers." + serviceName + ".service":                     serviceName,
 					"traefik.http.routers." + serviceName + ".tls":                         "true",
 					"traefik.http.services." + serviceName + ".loadbalancer.server.port":   detectedPort,
