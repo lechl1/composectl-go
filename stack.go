@@ -154,6 +154,13 @@ type ComposeService struct {
 	MemLimit      string                 `yaml:"mem_limit,omitempty"`
 	MemswapLimit  int64                  `yaml:"memswap_limit,omitempty"`
 	CPUs          interface{}            `yaml:"cpus,omitempty"` // Can be string or number
+	Logging       *LoggingConfig         `yaml:"logging,omitempty"`
+}
+
+// LoggingConfig represents the logging configuration for a service
+type LoggingConfig struct {
+	Driver  string            `yaml:"driver"`
+	Options map[string]string `yaml:"options,omitempty"`
 }
 
 // normalizeEnvironment converts environment variables from map or array format to array format
@@ -2450,6 +2457,31 @@ func enrichServices(compose *ComposeFile) {
 		if service.CPUs == nil {
 			service.CPUs = "0.5"
 			log.Printf("Auto-set cpus=0.5 for service %s", serviceName)
+		}
+
+		// Add default logging configuration if not specified
+		if service.Logging == nil {
+			service.Logging = &LoggingConfig{
+				Driver: "json-file",
+				Options: map[string]string{
+					"max-size": "10m",
+					"max-file": "3",
+				},
+			}
+			log.Printf("Auto-set logging driver=json-file with max-size=10m and max-file=3 for service %s", serviceName)
+		} else if service.Logging.Driver == "json-file" {
+			// If driver is json-file but options are missing, fill in the defaults
+			if service.Logging.Options == nil {
+				service.Logging.Options = make(map[string]string)
+			}
+			if _, exists := service.Logging.Options["max-size"]; !exists {
+				service.Logging.Options["max-size"] = "10m"
+				log.Printf("Auto-set logging max-size=10m for service %s", serviceName)
+			}
+			if _, exists := service.Logging.Options["max-file"]; !exists {
+				service.Logging.Options["max-file"] = "3"
+				log.Printf("Auto-set logging max-file=3 for service %s", serviceName)
+			}
 		}
 
 		compose.Services[serviceName] = service
