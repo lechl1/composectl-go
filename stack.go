@@ -959,6 +959,123 @@ func sanitizeComposePasswords(compose *ComposeFile) {
 		}
 	}
 
+	// Also process configs for variable references
+	if compose.Configs != nil {
+		for configName, config := range compose.Configs {
+			// Extract variable references from config content
+			if config.Content != "" {
+				extractedVars := extractVariableReferences(config.Content)
+				for _, varName := range extractedVars {
+					// Normalize the variable name before saving
+					normalizedVarName := normalizeEnvKey(varName)
+					// Only add if not already in prod.env
+					if _, exists := envVars[normalizedVarName]; !exists {
+						envVars[normalizedVarName] = "" // Add with empty value as placeholder
+						modified = true
+						log.Printf("Added environment variable '%s' to prod.env from config '%s'", normalizedVarName, configName)
+					}
+				}
+			}
+			// Also extract from file path if it exists
+			if config.File != "" {
+				extractedVars := extractVariableReferences(config.File)
+				for _, varName := range extractedVars {
+					normalizedVarName := normalizeEnvKey(varName)
+					if _, exists := envVars[normalizedVarName]; !exists {
+						envVars[normalizedVarName] = ""
+						modified = true
+						log.Printf("Added environment variable '%s' to prod.env from config '%s' file path", normalizedVarName, configName)
+					}
+				}
+			}
+		}
+	}
+
+	// Process volumes for variable references
+	if compose.Volumes != nil {
+		for volumeName, volume := range compose.Volumes {
+			if volume.Name != "" {
+				extractedVars := extractVariableReferences(volume.Name)
+				for _, varName := range extractedVars {
+					normalizedVarName := normalizeEnvKey(varName)
+					if _, exists := envVars[normalizedVarName]; !exists {
+						envVars[normalizedVarName] = ""
+						modified = true
+						log.Printf("Added environment variable '%s' to prod.env from volume '%s'", normalizedVarName, volumeName)
+					}
+				}
+			}
+			if volume.DriverOpts != nil {
+				for _, optValue := range volume.DriverOpts {
+					extractedVars := extractVariableReferences(optValue)
+					for _, varName := range extractedVars {
+						normalizedVarName := normalizeEnvKey(varName)
+						if _, exists := envVars[normalizedVarName]; !exists {
+							envVars[normalizedVarName] = ""
+							modified = true
+							log.Printf("Added environment variable '%s' to prod.env from volume '%s' driver opts", normalizedVarName, volumeName)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Process service-level fields for variable references
+	for serviceName, service := range compose.Services {
+		// Process volumes mount paths
+		for _, volumeMount := range service.Volumes {
+			extractedVars := extractVariableReferences(volumeMount)
+			for _, varName := range extractedVars {
+				normalizedVarName := normalizeEnvKey(varName)
+				if _, exists := envVars[normalizedVarName]; !exists {
+					envVars[normalizedVarName] = ""
+					modified = true
+					log.Printf("Added environment variable '%s' to prod.env from service '%s' volume mounts", normalizedVarName, serviceName)
+				}
+			}
+		}
+
+		// Process command field
+		if service.Command != nil {
+			var commandStrings []string
+			switch cmd := service.Command.(type) {
+			case string:
+				commandStrings = []string{cmd}
+			case []interface{}:
+				for _, c := range cmd {
+					if cmdStr, ok := c.(string); ok {
+						commandStrings = append(commandStrings, cmdStr)
+					}
+				}
+			}
+			for _, cmdStr := range commandStrings {
+				extractedVars := extractVariableReferences(cmdStr)
+				for _, varName := range extractedVars {
+					normalizedVarName := normalizeEnvKey(varName)
+					if _, exists := envVars[normalizedVarName]; !exists {
+						envVars[normalizedVarName] = ""
+						modified = true
+						log.Printf("Added environment variable '%s' to prod.env from service '%s' command", normalizedVarName, serviceName)
+					}
+				}
+			}
+		}
+
+		// Process image field
+		if service.Image != "" {
+			extractedVars := extractVariableReferences(service.Image)
+			for _, varName := range extractedVars {
+				normalizedVarName := normalizeEnvKey(varName)
+				if _, exists := envVars[normalizedVarName]; !exists {
+					envVars[normalizedVarName] = ""
+					modified = true
+					log.Printf("Added environment variable '%s' to prod.env from service '%s' image", normalizedVarName, serviceName)
+				}
+			}
+		}
+	}
+
 	// Write back to prod.env if modified
 	if modified {
 		if err := writeProdEnv(prodEnvPath, envVars); err != nil {
