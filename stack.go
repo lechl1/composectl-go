@@ -888,11 +888,13 @@ func sanitizeComposePasswords(compose *ComposeFile) {
 				if !isSensitive && value != "" {
 					extractedVars := extractVariableReferences(value)
 					for _, varName := range extractedVars {
+						// Normalize the variable name before saving
+						normalizedVarName := normalizeEnvKey(varName)
 						// Only add if not already in prod.env
-						if _, exists := envVars[varName]; !exists {
-							envVars[varName] = "" // Add with empty value as placeholder
+						if _, exists := envVars[normalizedVarName]; !exists {
+							envVars[normalizedVarName] = "" // Add with empty value as placeholder
 							modified = true
-							log.Printf("Added environment variable '%s' to prod.env from service '%s'", varName, serviceName)
+							log.Printf("Added environment variable '%s' to prod.env from service '%s'", normalizedVarName, serviceName)
 						}
 					}
 				}
@@ -918,11 +920,13 @@ func sanitizeComposePasswords(compose *ComposeFile) {
 							value := parts[1]
 							extractedVars := extractVariableReferences(value)
 							for _, varName := range extractedVars {
+								// Normalize the variable name before saving
+								normalizedVarName := normalizeEnvKey(varName)
 								// Only add if not already in prod.env
-								if _, exists := envVars[varName]; !exists {
-									envVars[varName] = "" // Add with empty value as placeholder
+								if _, exists := envVars[normalizedVarName]; !exists {
+									envVars[normalizedVarName] = "" // Add with empty value as placeholder
 									modified = true
-									log.Printf("Added environment variable '%s' to prod.env from service '%s' labels", varName, serviceName)
+									log.Printf("Added environment variable '%s' to prod.env from service '%s' labels", normalizedVarName, serviceName)
 								}
 							}
 						}
@@ -933,11 +937,13 @@ func sanitizeComposePasswords(compose *ComposeFile) {
 					if valueStr, ok := value.(string); ok {
 						extractedVars := extractVariableReferences(valueStr)
 						for _, varName := range extractedVars {
+							// Normalize the variable name before saving
+							normalizedVarName := normalizeEnvKey(varName)
 							// Only add if not already in prod.env
-							if _, exists := envVars[varName]; !exists {
-								envVars[varName] = "" // Add with empty value as placeholder
+							if _, exists := envVars[normalizedVarName]; !exists {
+								envVars[normalizedVarName] = "" // Add with empty value as placeholder
 								modified = true
-								log.Printf("Added environment variable '%s' to prod.env from service '%s' labels", varName, serviceName)
+								log.Printf("Added environment variable '%s' to prod.env from service '%s' labels", normalizedVarName, serviceName)
 							}
 						}
 					}
