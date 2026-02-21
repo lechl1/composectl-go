@@ -643,6 +643,33 @@ func inspectContainers(containerIDs []string) ([]map[string]interface{}, error) 
 
 // sanitizeEnvironmentVariable checks if an environment variable contains sensitive information
 // and replaces its value with a variable reference in the format ${ENV_KEY}
+// isSensitiveEnvironmentKey checks if an environment variable key is considered sensitive
+// based on common password/secret keywords. Excludes variables with "_FILE" suffix and
+// values that reference /run/secrets (Docker secrets path).
+func isSensitiveEnvironmentKey(key, value string) bool {
+	upperKey := strings.ToUpper(key)
+
+	// Exclude variables with "_FILE" suffix as they are file references, not actual passwords
+	if strings.Contains(upperKey, "_FILE") {
+		return false
+	}
+
+	// Do not treat as sensitive if the value starts with /run/secrets (Docker secrets path)
+	if strings.HasPrefix(value, "/run/secrets") {
+		return false
+	}
+
+	// Check for sensitive keywords
+	sensitiveKeywords := []string{"PASSWD", "PASSWORD", "SECRET", "KEY", "TOKEN", "API_KEY", "APIKEY", "PRIVATE"}
+	for _, keyword := range sensitiveKeywords {
+		if strings.Contains(upperKey, keyword) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func sanitizeEnvironmentVariable(envStr string) string {
 	// Split the environment variable into key and value
 	parts := strings.SplitN(envStr, "=", 2)
@@ -651,30 +678,10 @@ func sanitizeEnvironmentVariable(envStr string) string {
 	}
 
 	key := parts[0]
-
-	// Check if the key contains sensitive keywords
-	upperKey := strings.ToUpper(key)
-	sensitiveKeywords := []string{"PASSWD", "PASSWORD", "SECRET", "KEY", "TOKEN", "API_KEY", "APIKEY", "PRIVATE"}
-
-	isSensitive := false
-	// Exclude variables with "_FILE" suffix as they are file references, not actual passwords
-	if !strings.Contains(upperKey, "_FILE") {
-		for _, keyword := range sensitiveKeywords {
-			if strings.Contains(upperKey, keyword) {
-				isSensitive = true
-				break
-			}
-		}
-	}
-
-	if !isSensitive {
-		return envStr
-	}
-
 	value := parts[1]
 
-	// Do not replace if the value starts with /run/secrets (Docker secrets path)
-	if strings.HasPrefix(value, "/run/secrets") {
+	// Check if the key is sensitive
+	if !isSensitiveEnvironmentKey(key, value) {
 		return envStr
 	}
 
@@ -790,20 +797,8 @@ func sanitizeComposePasswords(compose *ComposeFile) {
 				key := parts[0]
 				value := parts[1]
 
-				// Check if this is a sensitive variable
-				upperKey := strings.ToUpper(key)
-				sensitiveKeywords := []string{"PASSWD", "PASSWORD", "SECRET", "KEY", "TOKEN", "API_KEY", "APIKEY", "PRIVATE"}
-
-				isSensitive := false
-				// Exclude variables with "_FILE" suffix as they are file references, not actual passwords
-				if !strings.Contains(upperKey, "_FILE") {
-					for _, keyword := range sensitiveKeywords {
-						if strings.Contains(upperKey, keyword) {
-							isSensitive = true
-							break
-						}
-					}
-				}
+				// Check if this is a sensitive variable using shared helper
+				isSensitive := isSensitiveEnvironmentKey(key, value)
 
 				// If sensitive and has a value, save to prod.env
 				if isSensitive && value != "" && !strings.HasPrefix(value, "${") && !strings.HasPrefix(value, "/run/secrets/") {
