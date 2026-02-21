@@ -1473,6 +1473,63 @@ func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
 			log.Printf("Auto-added homelab network to service %s", serviceName)
 		}
 
+		// Automatically add timezone mounts if files exist on host and not already mounted
+		timezoneMounts := []string{
+			"/etc/localtime:/etc/localtime:ro",
+			"/etc/timezone:/etc/timezone:ro",
+		}
+
+		for _, mount := range timezoneMounts {
+			// Extract the host path (first part before colon)
+			mountParts := strings.Split(mount, ":")
+			if len(mountParts) < 2 {
+				continue
+			}
+			hostPath := mountParts[0]
+			containerPath := mountParts[1]
+
+			// Check if file exists on host
+			if _, err := os.Stat(hostPath); err == nil {
+				// File exists, check if it's already in volumes
+				alreadyMounted := false
+
+				for _, existingVolume := range service.Volumes {
+					// Check if this source or target path is already mounted
+					volumeParts := strings.Split(existingVolume, ":")
+					if len(volumeParts) >= 2 {
+						existingSource := volumeParts[0]
+						existingTarget := volumeParts[1]
+
+						// Check if either the source or target matches
+						if existingSource == hostPath || existingTarget == containerPath {
+							alreadyMounted = true
+							break
+						}
+					}
+				}
+
+				if !alreadyMounted {
+					service.Volumes = append(service.Volumes, mount)
+					log.Printf("Auto-added timezone mount %s to service %s", mount, serviceName)
+				}
+			}
+		}
+
+		// Automatically add TZ environment variable if not already set
+		hasTZ := false
+		for _, env := range service.Environment {
+			// Check if TZ is already defined
+			if strings.HasPrefix(env, "TZ=") {
+				hasTZ = true
+				break
+			}
+		}
+
+		if !hasTZ {
+			service.Environment = append(service.Environment, "TZ=${TZ}")
+			log.Printf("Auto-added TZ=${TZ} environment variable to service %s", serviceName)
+		}
+
 		compose.Services[serviceName] = service
 	}
 
