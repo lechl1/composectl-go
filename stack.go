@@ -1237,62 +1237,11 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 		}
 
 		// Check if standard HTTP/HTTPS ports are used before filtering labels
-		standardHTTPPorts := []string{"80", "8000", "8080", "8081", "443", "8443", "3000", "3001", "5000", "5001"}
-		httpsOnlyPorts := []string{"443", "8443"}
-		usesHTTPPort := false
-		detectedPort := ""
-		isHTTPS := false
+		detectedPort, isHTTPS, usesHTTPPort := detectHTTPPort(service)
 
-		// Check in port declarations
-		for _, portMapping := range service.Ports {
-			parts := strings.Split(portMapping, ":")
-			var containerPort string
-			if len(parts) > 1 {
-				containerPort = strings.Split(parts[len(parts)-1], "/")[0] // Remove /tcp or /udp if present
-			} else {
-				containerPort = strings.Split(parts[0], "/")[0]
-			}
-			for _, httpPort := range standardHTTPPorts {
-				if containerPort == httpPort {
-					usesHTTPPort = true
-					detectedPort = containerPort
-					// Check if it's an HTTPS port
-					for _, httpsPort := range httpsOnlyPorts {
-						if containerPort == httpsPort {
-							isHTTPS = true
-							break
-						}
-					}
-					break
-				}
-			}
-			if usesHTTPPort {
-				break
-			}
-		}
-
-		// Check in environment variables if port not found yet
-		if !usesHTTPPort && service.Environment != nil {
-			envArray := normalizeEnvironment(service.Environment)
-			for _, env := range envArray {
-				envUpper := strings.ToUpper(env)
-				for _, httpPort := range standardHTTPPorts {
-					if strings.Contains(envUpper, "PORT="+httpPort) ||
-						strings.Contains(envUpper, "PORT:"+httpPort) ||
-						strings.Contains(envUpper, ":"+httpPort) {
-						usesHTTPPort = true
-						detectedPort = httpPort
-						break
-					}
-				}
-				if usesHTTPPort {
-					break
-				}
-			}
-		}
-
-		// Check in original labels (before filtering) for port hints
+		// If port not detected from service config, check in original labels for port hints
 		if !usesHTTPPort {
+			standardHTTPPorts := []string{"80", "8000", "8080", "8081", "443", "8443", "3000", "3001", "5000", "5001"}
 			for key, value := range labels {
 				if strings.Contains(strings.ToLower(key), "port") {
 					valueStr := fmt.Sprintf("%v", value)
@@ -1300,6 +1249,10 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 						if strings.Contains(valueStr, httpPort) {
 							usesHTTPPort = true
 							detectedPort = httpPort
+							// Check if it's HTTPS port
+							if httpPort == "443" || httpPort == "8443" {
+								isHTTPS = true
+							}
 							break
 						}
 					}
@@ -1322,22 +1275,14 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 
 		// Add Traefik labels if HTTP port detected
 		if usesHTTPPort {
-			serviceLabels["traefik.enable"] = "true"
-			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.entrypoints", serviceName)] = "https"
-			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.rule", serviceName)] = fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${PUBLIC_DOMAIN_NAME}`) || Host(`%s`)", serviceName, serviceName, serviceName)
-			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.service", serviceName)] = serviceName
-			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.tls", serviceName)] = "true"
-			if detectedPort != "" {
-				serviceLabels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", serviceName)] = detectedPort
-			} else {
-				serviceLabels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", serviceName)] = "80"
-			}
-			// Set scheme to https if HTTPS port (443 or 8443) is detected
+			scheme := "http"
 			if isHTTPS {
-				serviceLabels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.scheme", serviceName)] = "https"
-			} else {
-				serviceLabels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.scheme", serviceName)] = "http"
+				scheme = "https"
 			}
+			if detectedPort == "" {
+				detectedPort = "80"
+			}
+			addTraefikLabelsInterface(serviceLabels, serviceName, detectedPort, scheme)
 		}
 
 		if len(serviceLabels) > 0 {
@@ -2205,6 +2150,117 @@ func processSecretsWithoutSideEffects(compose *ComposeFile) {
 	// NOTE: We do NOT call ensureSecretsInProdEnv here - that's the key difference!
 }
 
+// detectHTTPPort detects HTTP/HTTPS ports from service configuration
+// Returns: detectedPort, isHTTPS, found
+func detectHTTPPort(service ComposeService) (string, bool, bool) {
+	httpsOnlyPorts := []string{"443", "8443"}
+	httpPorts := []string{"80", "8080", "3000", "4200", "5000", "8000", "8081", "8888", "9000"}
+	standardHTTPPorts := append(httpPorts, httpsOnlyPorts...)
+
+	detectedPort := ""
+	isHTTPS := false
+
+	// Check in port declarations
+	for _, portMapping := range service.Ports {
+		parts := strings.Split(portMapping, ":")
+		var containerPort string
+		if len(parts) > 1 {
+			containerPort = strings.Split(parts[len(parts)-1], "/")[0] // Remove /tcp or /udp if present
+		} else {
+			containerPort = strings.Split(parts[0], "/")[0]
+		}
+
+		// Check if it's an HTTPS port
+		for _, httpsPort := range httpsOnlyPorts {
+			if containerPort == httpsPort {
+				isHTTPS = true
+				detectedPort = containerPort
+				return detectedPort, isHTTPS, true
+			}
+		}
+
+		// Check if it's a common HTTP port
+		for _, httpPort := range httpPorts {
+			if containerPort == httpPort {
+				detectedPort = containerPort
+				return detectedPort, isHTTPS, true
+			}
+		}
+	}
+
+	// Check in environment variables if port not found yet
+	if service.Environment != nil {
+		envArray := normalizeEnvironment(service.Environment)
+		for _, env := range envArray {
+			envUpper := strings.ToUpper(env)
+			for _, httpPort := range standardHTTPPorts {
+				if strings.Contains(envUpper, "PORT="+httpPort) ||
+					strings.Contains(envUpper, "PORT:"+httpPort) ||
+					strings.Contains(envUpper, ":"+httpPort) {
+					detectedPort = httpPort
+					// Check if it's HTTPS
+					for _, httpsPort := range httpsOnlyPorts {
+						if httpPort == httpsPort {
+							isHTTPS = true
+							break
+						}
+					}
+					return detectedPort, isHTTPS, true
+				}
+			}
+		}
+	}
+
+	return "", false, false
+}
+
+// generateTraefikLabels generates the standard Traefik labels for a service
+func generateTraefikLabels(serviceName string, port string, scheme string) map[string]string {
+	return map[string]string{
+		"traefik.enable": "true",
+		"traefik.http.routers." + serviceName + ".entrypoints":                 "https",
+		"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${PUBLIC_DOMAIN_NAME}`) || Host(`%s`)", serviceName, serviceName, serviceName),
+		"traefik.http.routers." + serviceName + ".service":                     serviceName,
+		"traefik.http.routers." + serviceName + ".tls":                         "true",
+		"traefik.http.services." + serviceName + ".loadbalancer.server.port":   port,
+		"traefik.http.services." + serviceName + ".loadbalancer.server.scheme": scheme,
+	}
+}
+
+// addTraefikLabels adds Traefik labels to a labels map if they don't already exist
+// Returns true if any labels were added
+func addTraefikLabels(labelsMap map[string]string, serviceName string, port string, scheme string) bool {
+	traefikLabels := generateTraefikLabels(serviceName, port, scheme)
+
+	added := false
+	// Only add labels that don't already exist
+	for key, value := range traefikLabels {
+		if _, exists := labelsMap[key]; !exists {
+			labelsMap[key] = value
+			added = true
+		}
+	}
+
+	return added
+}
+
+// addTraefikLabelsInterface adds Traefik labels to a labels map[string]interface{} if they don't already exist
+// Returns true if any labels were added
+func addTraefikLabelsInterface(labelsMap map[string]interface{}, serviceName string, port string, scheme string) bool {
+	traefikLabels := generateTraefikLabels(serviceName, port, scheme)
+
+	added := false
+	// Only add labels that don't already exist
+	for key, value := range traefikLabels {
+		if _, exists := labelsMap[key]; !exists {
+			labelsMap[key] = value
+			added = true
+		}
+	}
+
+	return added
+}
+
 // enrichServices enriches all services in a compose file with Traefik labels,
 // networks, volumes, sysctls, capabilities, timezone mounts, etc.
 func enrichServices(compose *ComposeFile) {
@@ -2271,89 +2327,19 @@ func enrichServices(compose *ComposeFile) {
 
 		// If custom port labels were found, add Traefik labels
 		if customPort != "" {
-			// Add traefik.enable if not present
-			if _, exists := labelsMap["traefik.enable"]; !exists {
-				labelsMap["traefik.enable"] = "true"
-			}
-
-			// Add standard Traefik labels if not present
-			traefikLabels := map[string]string{
-				"traefik.http.routers." + serviceName + ".entrypoints":                 "https",
-				"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${PUBLIC_DOMAIN_NAME}`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
-				"traefik.http.routers." + serviceName + ".service":                     serviceName,
-				"traefik.http.routers." + serviceName + ".tls":                         "true",
-				"traefik.http.services." + serviceName + ".loadbalancer.server.port":   customPort,
-				"traefik.http.services." + serviceName + ".loadbalancer.server.scheme": customScheme,
-			}
-
-			// Only add labels that don't already exist
-			for key, value := range traefikLabels {
-				if _, exists := labelsMap[key]; !exists {
-					labelsMap[key] = value
-				}
-			}
+			addTraefikLabels(labelsMap, serviceName, customPort, customScheme)
 		} else if hasTraefikLabels {
 			// Only auto-add Traefik configuration if the service already has Traefik labels
-			// Detect if service uses HTTPS ports (443 or 8443)
-			httpsOnlyPorts := []string{"443", "8443"}
-			httpPorts := []string{"80", "8080", "3000", "4200", "5000", "8000", "8081", "8888", "9000"}
-			isHTTPS := false
-			detectedPort := ""
-
-			// Check in port declarations
-			for _, portMapping := range service.Ports {
-				parts := strings.Split(portMapping, ":")
-				var containerPort string
-				if len(parts) > 1 {
-					containerPort = strings.Split(parts[len(parts)-1], "/")[0] // Remove /tcp or /udp if present
-				} else {
-					containerPort = strings.Split(parts[0], "/")[0]
-				}
-				// Check if it's an HTTPS port
-				for _, httpsPort := range httpsOnlyPorts {
-					if containerPort == httpsPort {
-						isHTTPS = true
-						detectedPort = containerPort
-						break
-					}
-				}
-				// Check if it's a common HTTP port
-				if detectedPort == "" {
-					for _, httpPort := range httpPorts {
-						if containerPort == httpPort {
-							detectedPort = containerPort
-							break
-						}
-					}
-				}
-				if isHTTPS {
-					break
-				}
-			}
+			// Detect port from service configuration
+			detectedPort, isHTTPS, found := detectHTTPPort(service)
 
 			// Only add full Traefik configuration if we detected an HTTP/HTTPS port
-			if detectedPort != "" {
-				// Add Traefik labels if not already present
+			if found && detectedPort != "" {
 				scheme := "http"
 				if isHTTPS {
 					scheme = "https"
 				}
-
-				traefikLabels := map[string]string{
-					"traefik.http.routers." + serviceName + ".entrypoints":                 "https",
-					"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${PUBLIC_DOMAIN_NAME}`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
-					"traefik.http.routers." + serviceName + ".service":                     serviceName,
-					"traefik.http.routers." + serviceName + ".tls":                         "true",
-					"traefik.http.services." + serviceName + ".loadbalancer.server.port":   detectedPort,
-					"traefik.http.services." + serviceName + ".loadbalancer.server.scheme": scheme,
-				}
-
-				// Only add labels that don't already exist
-				for key, value := range traefikLabels {
-					if _, exists := labelsMap[key]; !exists {
-						labelsMap[key] = value
-					}
-				}
+				addTraefikLabels(labelsMap, serviceName, detectedPort, scheme)
 			}
 		}
 
