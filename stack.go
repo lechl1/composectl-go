@@ -1385,7 +1385,7 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Sanitize without extracting again (passwords already in prod.env)
-	sanitizeComposePasswordsWithoutExtraction(&enrichedCompose)
+	sanitizeComposePasswords(&enrichedCompose)
 
 	// Marshal the sanitized enriched version back to YAML for .effective.yml file
 	var enrichedSanitizedBuf strings.Builder
