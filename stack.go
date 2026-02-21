@@ -1560,6 +1560,33 @@ func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
 			log.Printf("Auto-added TZ=${TZ} environment variable to service %s", serviceName)
 		}
 
+		// Automatically set container_name based on image if not already defined
+		if service.ContainerName == "" && service.Image != "" {
+			// Extract container name from image
+			// Examples:
+			// "nginx:latest" -> "nginx"
+			// "docker.io/library/nginx:latest" -> "nginx"
+			// "ghcr.io/owner/repo:tag" -> "repo"
+			// "registry.example.com:5000/path/to/image:version" -> "image"
+
+			imageName := service.Image
+
+			// Remove registry prefix (anything before the last /)
+			parts := strings.Split(imageName, "/")
+			imageName = parts[len(parts)-1]
+
+			// Remove version/tag (anything after :)
+			imageName = strings.Split(imageName, ":")[0]
+
+			// Remove @sha256 digest if present
+			imageName = strings.Split(imageName, "@")[0]
+
+			if imageName != "" {
+				service.ContainerName = imageName
+				log.Printf("Auto-set container_name=%s for service %s based on image %s", imageName, serviceName, service.Image)
+			}
+		}
+
 		compose.Services[serviceName] = service
 	}
 
