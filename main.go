@@ -12,6 +12,7 @@ func main() {
 	http.HandleFunc("/thumbnail/", HandleThumbnail)
 	http.HandleFunc("/api/containers/", handleContainerAPI)
 	http.HandleFunc("/api/stacks/", handleStackAPI)
+	http.HandleFunc("/api/enrich/", HandleEnrichYAML)
 	http.HandleFunc("/", HandleRoot)
 
 	log.Println("Server running on http://localhost:8080")

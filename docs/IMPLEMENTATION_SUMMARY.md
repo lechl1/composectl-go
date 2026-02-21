@@ -62,7 +62,7 @@ Location: stack.go (around line 1263)
 
 ### 4. Integration Points
 
-#### enrichComposeWithTraefikLabels() function
+#### enrichAndSanitizeCompose() function
 - Added call to `processSecrets(&compose)` at the beginning
 - Ensures secrets are processed when updating stacks via API
 

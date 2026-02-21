@@ -104,7 +104,7 @@ DB_PASSWORD=jK7.mN2_pQ5+rS8-tU1.vW4_xY6+zA9-bC3.dE0_fG2+
 
 This automatic processing happens in two scenarios:
 
-1. **When updating a stack via PUT /api/stacks/{name}** - The `enrichComposeWithTraefikLabels` function processes secrets before saving
+1. **When updating a stack via PUT /api/stacks/{name}** - The `enrichAndSanitizeCompose` function processes secrets before saving
 2. **When reconstructing from containers** - If a stack YAML doesn't exist and is reconstructed from running containers, secrets are automatically detected and added
 
 ## Notes

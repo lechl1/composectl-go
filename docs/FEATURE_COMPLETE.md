@@ -42,7 +42,7 @@ All features have been successfully implemented and tested.
 
 ### 2. Integration Points
 
-- ✅ Integrated into `enrichComposeWithTraefikLabels()`
+- ✅ Integrated into `enrichAndSanitizeCompose()`
   - Called when updating stacks via API
   
 - ✅ Integrated into `reconstructComposeFromContainers()`
