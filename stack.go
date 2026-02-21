@@ -18,6 +18,81 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// MultilineString is a custom type that forces multiline YAML formatting for strings with line breaks
+type MultilineString string
+
+// MarshalYAML implements yaml.Marshaler to force literal style for multiline strings
+func (ms MultilineString) MarshalYAML() (interface{}, error) {
+	s := string(ms)
+	if strings.Contains(s, "\n") {
+		// Create a node with literal style (|) for multiline strings
+		node := &yaml.Node{
+			Kind:  yaml.ScalarNode,
+			Style: yaml.LiteralStyle, // Use | style for multiline
+			Value: s,
+		}
+		return node, nil
+	}
+	// Return as regular string if no line breaks
+	return s, nil
+}
+
+// forceMultilineInYAML recursively processes YAML nodes and sets literal style for strings with line breaks
+func forceMultilineInYAML(node *yaml.Node) {
+	if node == nil {
+		return
+	}
+
+	switch node.Kind {
+	case yaml.DocumentNode:
+		// Process document content
+		for _, child := range node.Content {
+			forceMultilineInYAML(child)
+		}
+	case yaml.MappingNode:
+		// Process all key-value pairs in the mapping
+		for _, child := range node.Content {
+			forceMultilineInYAML(child)
+		}
+	case yaml.SequenceNode:
+		// Process all items in the sequence
+		for _, child := range node.Content {
+			forceMultilineInYAML(child)
+		}
+	case yaml.ScalarNode:
+		// If this is a string scalar with line breaks, use literal style
+		if node.Tag == "!!str" && strings.Contains(node.Value, "\n") {
+			node.Style = yaml.LiteralStyle
+		}
+	}
+}
+
+// encodeYAMLWithMultiline encodes a value to YAML with multiline strings properly formatted
+func encodeYAMLWithMultiline(buf *strings.Builder, value interface{}) error {
+	// First, marshal to a YAML node
+	var node yaml.Node
+	if err := node.Encode(value); err != nil {
+		return fmt.Errorf("failed to encode to node: %w", err)
+	}
+
+	// Process the node to set multiline style
+	forceMultilineInYAML(&node)
+
+	// Now encode the processed node
+	encoder := yaml.NewEncoder(buf)
+	encoder.SetIndent(2)
+
+	if err := encoder.Encode(&node); err != nil {
+		return fmt.Errorf("failed to marshal: %w", err)
+	}
+
+	if err := encoder.Close(); err != nil {
+		return fmt.Errorf("failed to close encoder: %w", err)
+	}
+
+	return nil
+}
+
 // ComposeFile represents a docker-compose.yml structure
 type ComposeFile struct {
 	Services map[string]ComposeService `yaml:"services"`
@@ -1145,7 +1220,7 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 	// Process secrets to ensure proper declaration
 	processSecrets(&compose)
 
-	// Marshal to YAML with 2-space indentation
+	// Marshal to YAML with 2-space indentation and multiline string support
 	var buf strings.Builder
 
 	// Add disclaimer comment at the top
@@ -1153,15 +1228,8 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 	buf.WriteString("# Some settings may be incomplete or differ from the original configuration.\n")
 	buf.WriteString("# Please review and adjust as needed before using in production.\n")
 
-	encoder := yaml.NewEncoder(&buf)
-	encoder.SetIndent(2)
-
-	if err := encoder.Encode(compose); err != nil {
-		return "", fmt.Errorf("failed to marshal compose file: %w", err)
-	}
-
-	if err := encoder.Close(); err != nil {
-		return "", fmt.Errorf("failed to close yaml encoder: %w", err)
+	if err := encodeYAMLWithMultiline(&buf, compose); err != nil {
+		return "", err
 	}
 
 	return buf.String(), nil
@@ -1297,15 +1365,8 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 
 	// Marshal the sanitized original version back to YAML for .yml file
 	var sanitizedBuf strings.Builder
-	sanitizedEncoder := yaml.NewEncoder(&sanitizedBuf)
-	sanitizedEncoder.SetIndent(2)
-	if err := sanitizedEncoder.Encode(originalCompose); err != nil {
+	if err := encodeYAMLWithMultiline(&sanitizedBuf, originalCompose); err != nil {
 		log.Printf("Error encoding sanitized YAML: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to encode YAML: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if err := sanitizedEncoder.Close(); err != nil {
-		log.Printf("Error closing sanitized YAML encoder: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to encode YAML: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -1333,15 +1394,8 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 
 	// Marshal the sanitized enriched version back to YAML for .effective.yml file
 	var enrichedSanitizedBuf strings.Builder
-	enrichedSanitizedEncoder := yaml.NewEncoder(&enrichedSanitizedBuf)
-	enrichedSanitizedEncoder.SetIndent(2)
-	if err := enrichedSanitizedEncoder.Encode(enrichedCompose); err != nil {
+	if err := encodeYAMLWithMultiline(&enrichedSanitizedBuf, enrichedCompose); err != nil {
 		log.Printf("Error encoding sanitized enriched YAML: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to encode YAML: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if err := enrichedSanitizedEncoder.Close(); err != nil {
-		log.Printf("Error closing sanitized enriched YAML encoder: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to encode YAML: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -1939,17 +1993,10 @@ func enrichComposeWithoutSideEffects(yamlContent []byte) ([]byte, error) {
 	// Enrich each service with Traefik labels and other auto-additions
 	enrichServices(&compose)
 
-	// Marshal back to YAML with 2-space indentation
+	// Marshal back to YAML with multiline string support
 	var buf strings.Builder
-	encoder := yaml.NewEncoder(&buf)
-	encoder.SetIndent(2)
-
-	if err := encoder.Encode(compose); err != nil {
-		return nil, fmt.Errorf("failed to marshal enriched YAML: %w", err)
-	}
-
-	if err := encoder.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close yaml encoder: %w", err)
+	if err := encodeYAMLWithMultiline(&buf, compose); err != nil {
+		return nil, err
 	}
 
 	return []byte(buf.String()), nil
@@ -2524,17 +2571,10 @@ func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
 	// Enrich services
 	enrichServices(&compose)
 
-	// Marshal back to YAML
+	// Marshal back to YAML with multiline string support
 	var buf strings.Builder
-	encoder := yaml.NewEncoder(&buf)
-	encoder.SetIndent(2)
-
-	if err := encoder.Encode(compose); err != nil {
-		return nil, fmt.Errorf("failed to marshal compose file: %w", err)
-	}
-
-	if err := encoder.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close yaml encoder: %w", err)
+	if err := encodeYAMLWithMultiline(&buf, compose); err != nil {
+		return nil, err
 	}
 
 	return []byte(buf.String()), nil
