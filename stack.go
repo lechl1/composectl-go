@@ -88,6 +88,15 @@ type LoggingConfig struct {
 	Options map[string]string `yaml:"options,omitempty"`
 }
 
+// ComposeAction represents the action to perform on a compose stack
+type ComposeAction int
+
+const (
+	ComposeActionNone ComposeAction = iota
+	ComposeActionUp
+	ComposeActionDown
+)
+
 // normalizeEnvironment converts environment variables from map or array format to array format
 // Returns an array of strings in "KEY=VALUE" format
 func normalizeEnvironment(env interface{}) []string {
@@ -1305,10 +1314,10 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	HandleDockerComposeFile(w, r, stackName, false)
+	HandleDockerComposeFile(w, r, stackName, false, ComposeActionNone)
 }
 
-func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName string, dryRun bool) {
+func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName string, dryRun bool, action ComposeAction) {
 	// Read the request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -1388,6 +1397,32 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 			return
 		}
 		log.Printf("Successfully updated stack: %s (original: %s, effective: %s)", stackName, originalFilePath, effectiveFilePath)
+
+		var cmd *exec.Cmd
+		var actionName string
+
+		switch action {
+		case ComposeActionNone:
+			// No action to perform
+		case ComposeActionUp:
+			actionName = "up"
+			cmd = exec.Command("docker", "compose", "-f", effectiveFilePath, "-p", stackName, "up", "-d", "--wait")
+		case ComposeActionDown:
+			actionName = "down"
+			cmd = exec.Command("docker", "compose", "-f", effectiveFilePath, "-p", stackName, "down")
+		}
+
+		if cmd != nil {
+			log.Printf("Executing docker compose %s for stack: %s", actionName, stackName)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				log.Printf("Error executing docker compose %s for stack %s: %v, output: %s", actionName, stackName, err, string(output))
+				http.Error(w, fmt.Sprintf("Failed to execute docker compose %s: %v\nOutput: %s", actionName, err, string(output)), http.StatusInternalServerError)
+				return
+			}
+			log.Printf("Successfully executed docker compose %s for stack %s: %s", actionName, stackName, string(output))
+		}
+
 	}
 	w.Header().Set("Content-Type", "application/yaml")
 	w.WriteHeader(http.StatusOK)
@@ -2477,7 +2512,7 @@ func HandleEnrichYAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	HandleDockerComposeFile(w, r, stackName, false)
+	HandleDockerComposeFile(w, r, stackName, false, ComposeActionNone)
 }
 
 func HandleDeleteStack(w http.ResponseWriter, r *http.Request) {
