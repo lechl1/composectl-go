@@ -20,11 +20,15 @@ type ComposeFile struct {
 	Services map[string]ComposeService `yaml:"services"`
 	Volumes  map[string]ComposeVolume  `yaml:"volumes,omitempty"`
 	Networks map[string]ComposeNetwork `yaml:"networks,omitempty"`
+	Configs  map[string]ComposeConfig  `yaml:"configs,omitempty"`
 }
 
 // ComposeVolume represents a volume configuration
 type ComposeVolume struct {
-	External bool `yaml:"external"`
+	External   bool              `yaml:"external,omitempty"`
+	Name       string            `yaml:"name,omitempty"`
+	Driver     string            `yaml:"driver,omitempty"`
+	DriverOpts map[string]string `yaml:"driver_opts,omitempty"`
 }
 
 // ComposeNetwork represents a network configuration
@@ -32,16 +36,33 @@ type ComposeNetwork struct {
 	External bool `yaml:"external"`
 }
 
+// ComposeConfig represents a config configuration
+type ComposeConfig struct {
+	Content string `yaml:"content,omitempty"`
+	File    string `yaml:"file,omitempty"`
+}
+
+// ComposeServiceConfig represents a config mount in a service
+type ComposeServiceConfig struct {
+	Source string `yaml:"source"`
+	Target string `yaml:"target"`
+}
+
 // ComposeService represents a service in docker-compose.yml
 type ComposeService struct {
 	Image         string                 `yaml:"image"`
-	ContainerName string                 `yaml:"container_name"`
-	Volumes       []string               `yaml:"volumes"`
-	Ports         []string               `yaml:"ports"`
+	ContainerName string                 `yaml:"container_name,omitempty"`
+	User          string                 `yaml:"user,omitempty"`
+	Restart       string                 `yaml:"restart,omitempty"`
+	Volumes       []string               `yaml:"volumes,omitempty"`
+	Ports         []string               `yaml:"ports,omitempty"`
 	Environment   []string               `yaml:"environment,omitempty"`
 	Networks      interface{}            `yaml:"networks,omitempty"` // Can be array or map
 	Labels        interface{}            `yaml:"labels,omitempty"`   // Can be array or map
 	Command       interface{}            `yaml:"command,omitempty"`  // Can be string or array
+	Configs       []ComposeServiceConfig `yaml:"configs,omitempty"`
+	CapAdd        []string               `yaml:"cap_add,omitempty"`
+	Sysctls       interface{}            `yaml:"sysctls,omitempty"` // Can be array or map
 }
 
 // handleStackAPI routes stack API requests to appropriate handlers
@@ -52,6 +73,8 @@ func handleStackAPI(w http.ResponseWriter, r *http.Request) {
 	if path == "/api/stacks" || path == "/api/stacks/" {
 		if r.Method == http.MethodGet {
 			HandleListStacks(w, r)
+		} else if r.Method == http.MethodPost {
+			HandlePostStack(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -99,7 +122,7 @@ func getStacksList() ([]map[string]interface{}, error) {
 	if err == nil {
 		// Collect YAML file stack names and paths
 		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".yml") {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".yml") && !strings.HasSuffix(entry.Name(), ".effective.yml") {
 				stackName := strings.TrimSuffix(entry.Name(), ".yml")
 				ymlStacks[stackName] = filepath.Join(stacksDir, entry.Name())
 			}
@@ -137,7 +160,6 @@ func getStacksList() ([]map[string]interface{}, error) {
 
 	return runningStacks, nil
 }
-
 
 // HandleListStacks handles GET /api/stacks
 // Returns a combined list of running stacks from Docker and available YAML files
@@ -369,6 +391,21 @@ func getRunningStacks() ([]map[string]interface{}, error) {
 	return stacks, nil
 }
 
+// getEffectiveComposeFile returns the path to the effective compose file for a stack
+// If the effective file exists, it returns that path; otherwise, it returns the regular .yml path
+func getEffectiveComposeFile(stackName string) string {
+	effectivePath := filepath.Join("stacks", stackName+".effective.yml")
+	regularPath := filepath.Join("stacks", stackName+".yml")
+
+	// Check if effective file exists
+	if _, err := os.Stat(effectivePath); err == nil {
+		return effectivePath
+	}
+
+	// Fallback to regular file
+	return regularPath
+}
+
 // HandleStopStack handles POST /api/stacks/{name}/stop
 // Stops all containers in a Docker Compose stack
 func HandleStopStack(w http.ResponseWriter, r *http.Request) {
@@ -393,8 +430,11 @@ func HandleStopStack(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Stopping stack: %s", stackName)
 
-	// Execute docker compose stop command
-	cmd := exec.Command("docker", "compose", "-p", stackName, "stop")
+	// Get the effective compose file path
+	composeFile := getEffectiveComposeFile(stackName)
+
+	// Execute docker compose stop command with the effective compose file
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", stackName, "stop")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Error stopping stack %s: %v, output: %s", stackName, err, string(output))
@@ -443,8 +483,11 @@ func HandleStartStack(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Starting stack: %s", stackName)
 
-	// Execute docker compose start command
-	cmd := exec.Command("docker", "compose", "-p", stackName, "start")
+	// Get the effective compose file path
+	composeFile := getEffectiveComposeFile(stackName)
+
+	// Execute docker compose start command with the effective compose file
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", stackName, "start")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Error starting stack %s: %v, output: %s", stackName, err, string(output))
@@ -517,6 +560,7 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 		Services: make(map[string]ComposeService),
 		Volumes:  make(map[string]ComposeVolume),
 		Networks: make(map[string]ComposeNetwork),
+		Configs:  make(map[string]ComposeConfig),
 	}
 
 	for _, containerData := range inspectData {
@@ -544,9 +588,20 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 			service.Image = image
 		}
 
-		// Container name
+		// Container name (only set if different from service name)
 		if name, ok := containerData["Name"].(string); ok {
-			service.ContainerName = strings.TrimPrefix(name, "/")
+			containerName := strings.TrimPrefix(name, "/")
+			if containerName != serviceName {
+				service.ContainerName = containerName
+			}
+		}
+
+		// Restart policy (only set if not "unless-stopped")
+		hostConfig, _ := containerData["HostConfig"].(map[string]interface{})
+		if restartPolicy, ok := hostConfig["RestartPolicy"].(map[string]interface{}); ok {
+			if policyName, ok := restartPolicy["Name"].(string); ok && policyName != "" && policyName != "unless-stopped" {
+				service.Restart = policyName
+			}
 		}
 
 		// Command
@@ -582,7 +637,6 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 		}
 
 		// Ports
-		hostConfig, _ := containerData["HostConfig"].(map[string]interface{})
 		if portBindings, ok := hostConfig["PortBindings"].(map[string]interface{}); ok {
 			for containerPort, bindings := range portBindings {
 				if bindingsList, ok := bindings.([]interface{}); ok {
@@ -612,7 +666,6 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 						volumeName, _ := mountMap["Name"].(string)
 						if volumeName != "" {
 							service.Volumes = append(service.Volumes, fmt.Sprintf("%s:%s", volumeName, destination))
-							compose.Volumes[volumeName] = ComposeVolume{External: true} // Add to volumes section as external
 						}
 					}
 				}
@@ -625,7 +678,6 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 				var networkNames []string
 				for networkName := range networks {
 					networkNames = append(networkNames, networkName)
-					compose.Networks[networkName] = ComposeNetwork{External: true} // Add to networks section as external
 				}
 				if len(networkNames) > 0 {
 					service.Networks = networkNames
@@ -633,13 +685,109 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 			}
 		}
 
-		// Labels (filter out compose-specific labels)
+		// Check if standard HTTP/HTTPS ports are used before filtering labels
+		standardHTTPPorts := []string{"80", "8000", "8080", "8081", "443", "8443", "3000", "3001", "5000", "5001"}
+		httpsOnlyPorts := []string{"443", "8443"}
+		usesHTTPPort := false
+		detectedPort := ""
+		isHTTPS := false
+
+		// Check in port declarations
+		for _, portMapping := range service.Ports {
+			parts := strings.Split(portMapping, ":")
+			var containerPort string
+			if len(parts) > 1 {
+				containerPort = strings.Split(parts[len(parts)-1], "/")[0] // Remove /tcp or /udp if present
+			} else {
+				containerPort = strings.Split(parts[0], "/")[0]
+			}
+			for _, httpPort := range standardHTTPPorts {
+				if containerPort == httpPort {
+					usesHTTPPort = true
+					detectedPort = containerPort
+					// Check if it's an HTTPS port
+					for _, httpsPort := range httpsOnlyPorts {
+						if containerPort == httpsPort {
+							isHTTPS = true
+							break
+						}
+					}
+					break
+				}
+			}
+			if usesHTTPPort {
+				break
+			}
+		}
+
+		// Check in environment variables if port not found yet
+		if !usesHTTPPort && service.Environment != nil {
+			for _, env := range service.Environment {
+				envUpper := strings.ToUpper(env)
+				for _, httpPort := range standardHTTPPorts {
+					if strings.Contains(envUpper, "PORT="+httpPort) ||
+						strings.Contains(envUpper, "PORT:"+httpPort) ||
+						strings.Contains(envUpper, ":"+httpPort) {
+						usesHTTPPort = true
+						detectedPort = httpPort
+						break
+					}
+				}
+				if usesHTTPPort {
+					break
+				}
+			}
+		}
+
+		// Check in original labels (before filtering) for port hints
+		if !usesHTTPPort {
+			for key, value := range labels {
+				if strings.Contains(strings.ToLower(key), "port") {
+					valueStr := fmt.Sprintf("%v", value)
+					for _, httpPort := range standardHTTPPorts {
+						if strings.Contains(valueStr, httpPort) {
+							usesHTTPPort = true
+							detectedPort = httpPort
+							break
+						}
+					}
+				}
+				if usesHTTPPort {
+					break
+				}
+			}
+		}
+
+		// Labels (filter out compose-specific labels, opencontainers labels, and traefik labels)
 		serviceLabels := make(map[string]interface{})
 		for key, value := range labels {
-			if !strings.HasPrefix(key, "com.docker.compose.") {
+			if !strings.HasPrefix(key, "com.docker.compose.") &&
+				!strings.HasPrefix(key, "org.opencontainers.image") &&
+				!strings.HasPrefix(key, "traefik") {
 				serviceLabels[key] = value
 			}
 		}
+
+		// Add Traefik labels if HTTP port detected
+		if usesHTTPPort {
+			serviceLabels["traefik.enable"] = "true"
+			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.entrypoints", serviceName)] = "https"
+			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.rule", serviceName)] = fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${HOMELAB_DOMAIN_NAME}`) || Host(`%s`)", serviceName, serviceName, serviceName)
+			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.service", serviceName)] = serviceName
+			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.tls", serviceName)] = "true"
+			if detectedPort != "" {
+				serviceLabels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", serviceName)] = detectedPort
+			} else {
+				serviceLabels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", serviceName)] = "80"
+			}
+			// Set scheme to https if HTTPS port (443 or 8443) is detected
+			if isHTTPS {
+				serviceLabels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.scheme", serviceName)] = "https"
+			} else {
+				serviceLabels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.scheme", serviceName)] = "http"
+			}
+		}
+
 		if len(serviceLabels) > 0 {
 			service.Labels = serviceLabels
 		}
@@ -772,8 +920,17 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// Construct the file path
-	filePath := filepath.Join("stacks", stackName+".yml")
+	// Parse and enrich the YAML with Traefik labels and auto-add undeclared networks/volumes
+	enrichedYAML, err := enrichComposeWithTraefikLabels(body)
+	if err != nil {
+		log.Printf("Error enriching compose file: %v", err)
+		http.Error(w, "Failed to process compose file", http.StatusBadRequest)
+		return
+	}
+
+	// Construct the file paths
+	originalFilePath := filepath.Join("stacks", stackName+".yml")
+	effectiveFilePath := filepath.Join("stacks", stackName+".effective.yml")
 
 	// Ensure the stacks directory exists
 	if err := os.MkdirAll("stacks", 0755); err != nil {
@@ -782,14 +939,21 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Write the file
-	if err := os.WriteFile(filePath, body, 0644); err != nil {
-		log.Printf("Error writing stack file %s: %v", filePath, err)
-		http.Error(w, "Failed to write stack file", http.StatusInternalServerError)
+	// Write the original file (user-provided content)
+	if err := os.WriteFile(originalFilePath, body, 0644); err != nil {
+		log.Printf("Error writing original stack file %s: %v", originalFilePath, err)
+		http.Error(w, "Failed to write original stack file", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Successfully updated stack: %s", stackName)
+	// Write the effective file (enriched with Traefik labels and auto-added networks/volumes)
+	if err := os.WriteFile(effectiveFilePath, enrichedYAML, 0644); err != nil {
+		log.Printf("Error writing effective stack file %s: %v", effectiveFilePath, err)
+		http.Error(w, "Failed to write effective stack file", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Successfully updated stack: %s (original: %s, effective: %s)", stackName, originalFilePath, effectiveFilePath)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -797,6 +961,321 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 		"stackName": stackName,
 		"message":   "Stack updated successfully",
 	})
+}
+
+// HandlePostStack handles POST /api/stacks
+// Creates a new stack from the provided docker-compose YAML
+func HandlePostStack(w http.ResponseWriter, r *http.Request) {
+	// Parse the request to get stack name and YAML content
+	var requestData struct {
+		Name    string `json:"name"`
+		Content string `json:"content"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&requestData); err != nil {
+		log.Printf("Error decoding request body: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	if requestData.Name == "" {
+		http.Error(w, "Stack name is required", http.StatusBadRequest)
+		return
+	}
+
+	if requestData.Content == "" {
+		http.Error(w, "Stack content is required", http.StatusBadRequest)
+		return
+	}
+
+	// Parse and enrich the YAML with Traefik labels and auto-add undeclared networks/volumes
+	enrichedYAML, err := enrichComposeWithTraefikLabels([]byte(requestData.Content))
+	if err != nil {
+		log.Printf("Error enriching compose file: %v", err)
+		http.Error(w, "Failed to process compose file", http.StatusBadRequest)
+		return
+	}
+
+	// Construct the file paths
+	originalFilePath := filepath.Join("stacks", requestData.Name+".yml")
+	effectiveFilePath := filepath.Join("stacks", requestData.Name+".effective.yml")
+
+	// Check if files already exist
+	if _, err := os.Stat(originalFilePath); err == nil {
+		http.Error(w, "Stack already exists", http.StatusConflict)
+		return
+	}
+
+	// Ensure the stacks directory exists
+	if err := os.MkdirAll("stacks", 0755); err != nil {
+		log.Printf("Error creating stacks directory: %v", err)
+		http.Error(w, "Failed to create stacks directory", http.StatusInternalServerError)
+		return
+	}
+
+	// Write the original file (user-provided content)
+	if err := os.WriteFile(originalFilePath, []byte(requestData.Content), 0644); err != nil {
+		log.Printf("Error writing original stack file %s: %v", originalFilePath, err)
+		http.Error(w, "Failed to write original stack file", http.StatusInternalServerError)
+		return
+	}
+
+	// Write the effective file (enriched with Traefik labels and auto-added networks/volumes)
+	if err := os.WriteFile(effectiveFilePath, enrichedYAML, 0644); err != nil {
+		log.Printf("Error writing effective stack file %s: %v", effectiveFilePath, err)
+		http.Error(w, "Failed to write effective stack file", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Successfully created stack: %s (original: %s, effective: %s)", requestData.Name, originalFilePath, effectiveFilePath)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":   true,
+		"stackName": requestData.Name,
+		"message":   "Stack created successfully",
+	})
+}
+
+// addUndeclaredNetworksAndVolumes analyzes services and adds any undeclared networks and volumes
+func addUndeclaredNetworksAndVolumes(compose *ComposeFile) {
+	// Initialize maps if they don't exist
+	if compose.Volumes == nil {
+		compose.Volumes = make(map[string]ComposeVolume)
+	}
+	if compose.Networks == nil {
+		compose.Networks = make(map[string]ComposeNetwork)
+	}
+
+	// Collect all networks and volumes referenced by services
+	referencedNetworks := make(map[string]bool)
+	referencedVolumes := make(map[string]bool)
+
+	for _, service := range compose.Services {
+		// Extract networks from service
+		switch v := service.Networks.(type) {
+		case []interface{}:
+			for _, net := range v {
+				if netStr, ok := net.(string); ok {
+					referencedNetworks[netStr] = true
+				}
+			}
+		case map[string]interface{}:
+			for net := range v {
+				referencedNetworks[net] = true
+			}
+		}
+
+		// Extract volumes from service
+		for _, volume := range service.Volumes {
+			// Parse volume definition to extract volume name
+			// Volume format can be:
+			// - "volume_name:/path/in/container"
+			// - "/host/path:/path/in/container"
+			// - "volume_name:/path:ro"
+			parts := strings.Split(volume, ":")
+			if len(parts) > 0 {
+				volumeName := parts[0]
+				// Only consider named volumes (not host paths starting with / or ./)
+				if !strings.HasPrefix(volumeName, "/") && !strings.HasPrefix(volumeName, "./") && !strings.HasPrefix(volumeName, "../") {
+					referencedVolumes[volumeName] = true
+				}
+			}
+		}
+	}
+
+	// Add missing networks as external
+	for network := range referencedNetworks {
+		if _, exists := compose.Networks[network]; !exists {
+			compose.Networks[network] = ComposeNetwork{External: true}
+			log.Printf("Auto-added undeclared network: %s (marked as external)", network)
+		}
+	}
+
+	// Add missing volumes as external
+	for volume := range referencedVolumes {
+		if _, exists := compose.Volumes[volume]; !exists {
+			compose.Volumes[volume] = ComposeVolume{External: true}
+			log.Printf("Auto-added undeclared volume: %s (marked as external)", volume)
+		}
+	}
+}
+
+// enrichComposeWithTraefikLabels parses a docker-compose YAML and enriches services with Traefik labels
+func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
+	// Parse the YAML
+	var compose ComposeFile
+	if err := yaml.Unmarshal(yamlContent, &compose); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+	}
+
+	// Enrich each service with Traefik labels
+	for serviceName, service := range compose.Services {
+		// Convert labels to map if needed
+		labelsMap := make(map[string]string)
+
+		if service.Labels != nil {
+			switch v := service.Labels.(type) {
+			case []interface{}:
+				// Labels as array of strings
+				for _, label := range v {
+					if labelStr, ok := label.(string); ok {
+						if parts := strings.SplitN(labelStr, "=", 2); len(parts) == 2 {
+							labelsMap[parts[0]] = parts[1]
+						}
+					}
+				}
+			case map[string]interface{}:
+				// Labels as map
+				for k, val := range v {
+					if valStr, ok := val.(string); ok {
+						labelsMap[k] = valStr
+					}
+				}
+			}
+		}
+
+		// Check if any Traefik labels are present
+		hasTraefikLabels := false
+		for key := range labelsMap {
+			if strings.HasPrefix(key, "traefik.") {
+				hasTraefikLabels = true
+				break
+			}
+		}
+
+		// If any Traefik label is used, automatically add traefik.enable=true
+		if hasTraefikLabels {
+			if _, exists := labelsMap["traefik.enable"]; !exists {
+				labelsMap["traefik.enable"] = "true"
+				log.Printf("Auto-added traefik.enable=true for service %s", serviceName)
+			}
+		}
+
+		// Handle custom https.port and http.port labels
+		var customPort string
+		var customScheme string
+
+		// Check for https.port=XXXX label
+		if httpsPort, exists := labelsMap["https.port"]; exists {
+			customPort = httpsPort
+			customScheme = "https"
+			delete(labelsMap, "https.port") // Remove from effective YAML
+			log.Printf("Detected https.port=%s for service %s, adding Traefik labels", httpsPort, serviceName)
+		} else if httpPort, exists := labelsMap["http.port"]; exists {
+			// Check for http.port=XXXX label
+			customPort = httpPort
+			customScheme = "http"
+			delete(labelsMap, "http.port") // Remove from effective YAML
+			log.Printf("Detected http.port=%s for service %s, adding Traefik labels", httpPort, serviceName)
+		}
+
+		// If custom port labels were found, add Traefik labels
+		if customPort != "" {
+			// Add traefik.enable if not present
+			if _, exists := labelsMap["traefik.enable"]; !exists {
+				labelsMap["traefik.enable"] = "true"
+			}
+
+			// Add standard Traefik labels if not present
+			traefikLabels := map[string]string{
+				"traefik.http.routers." + serviceName + ".entrypoints":                 "https",
+				"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${HOMELAB_DOMAIN_NAME}`) || Host(`%s.leochl.ddns.net`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
+				"traefik.http.routers." + serviceName + ".service":                     serviceName,
+				"traefik.http.routers." + serviceName + ".tls":                         "true",
+				"traefik.http.services." + serviceName + ".loadbalancer.server.port":   customPort,
+				"traefik.http.services." + serviceName + ".loadbalancer.server.scheme": customScheme,
+			}
+
+			// Only add labels that don't already exist
+			for key, value := range traefikLabels {
+				if _, exists := labelsMap[key]; !exists {
+					labelsMap[key] = value
+				}
+			}
+		} else {
+			// Existing logic: Detect if service uses HTTPS ports (443 or 8443)
+			httpsOnlyPorts := []string{"443", "8443"}
+			isHTTPS := false
+			detectedPort := "80"
+
+			// Check in port declarations
+			for _, portMapping := range service.Ports {
+				parts := strings.Split(portMapping, ":")
+				var containerPort string
+				if len(parts) > 1 {
+					containerPort = strings.Split(parts[len(parts)-1], "/")[0] // Remove /tcp or /udp if present
+				} else {
+					containerPort = strings.Split(parts[0], "/")[0]
+				}
+				// Check if it's an HTTPS port
+				for _, httpsPort := range httpsOnlyPorts {
+					if containerPort == httpsPort {
+						isHTTPS = true
+						detectedPort = containerPort
+						break
+					}
+				}
+				if isHTTPS {
+					break
+				}
+			}
+
+			// Add Traefik labels if not already present
+			scheme := "http"
+			if isHTTPS {
+				scheme = "https"
+			}
+
+			traefikLabels := map[string]string{
+				"traefik.enable": "true",
+				"traefik.http.routers." + serviceName + ".entrypoints":                 "https",
+				"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${HOMELAB_DOMAIN_NAME}`) || Host(`%s.leochl.ddns.net`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
+				"traefik.http.routers." + serviceName + ".service":                     serviceName,
+				"traefik.http.routers." + serviceName + ".tls":                         "true",
+				"traefik.http.services." + serviceName + ".loadbalancer.server.port":   detectedPort,
+				"traefik.http.services." + serviceName + ".loadbalancer.server.scheme": scheme,
+			}
+
+			// Only add labels that don't already exist
+			for key, value := range traefikLabels {
+				if _, exists := labelsMap[key]; !exists {
+					labelsMap[key] = value
+				}
+			}
+		}
+
+		// Convert back to array format for consistency with docker-compose
+		var labelsArray []string
+		for key, value := range labelsMap {
+			labelsArray = append(labelsArray, fmt.Sprintf("%s=%s", key, value))
+		}
+
+		// Sort labels for consistent output
+		sort.Strings(labelsArray)
+
+		service.Labels = labelsArray
+		compose.Services[serviceName] = service
+	}
+
+	// Add undeclared networks and volumes
+	addUndeclaredNetworksAndVolumes(&compose)
+
+	// Marshal back to YAML
+	var buf strings.Builder
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+
+	if err := encoder.Encode(compose); err != nil {
+		return nil, fmt.Errorf("failed to marshal compose file: %w", err)
+	}
+
+	if err := encoder.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close yaml encoder: %w", err)
+	}
+
+	return []byte(buf.String()), nil
 }
 
 func HandleDeleteStack(w http.ResponseWriter, r *http.Request) {
@@ -821,8 +1300,11 @@ func HandleDeleteStack(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Deleting stack: %s", stackName)
 
-	// Execute docker compose down command to remove all containers
-	cmd := exec.Command("docker", "compose", "-p", stackName, "down")
+	// Get the effective compose file path
+	composeFile := getEffectiveComposeFile(stackName)
+
+	// Execute docker compose down command to remove all containers using effective file
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", stackName, "down")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Error deleting stack %s: %v, output: %s", stackName, err, string(output))
@@ -838,13 +1320,22 @@ func HandleDeleteStack(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Successfully deleted stack: %s", stackName)
 
-	// Delete the stack YAML file from stacks directory
-	stackFilePath := filepath.Join("stacks", stackName+".yml")
-	if err := os.Remove(stackFilePath); err != nil {
+	// Delete both the original and effective stack YAML files
+	originalFilePath := filepath.Join("stacks", stackName+".yml")
+	effectiveFilePath := filepath.Join("stacks", stackName+".effective.yml")
+
+	if err := os.Remove(originalFilePath); err != nil {
 		// Log warning but don't fail the operation since containers are already removed
-		log.Printf("Warning: Failed to delete stack file %s: %v", stackFilePath, err)
+		log.Printf("Warning: Failed to delete original stack file %s: %v", originalFilePath, err)
 	} else {
-		log.Printf("Deleted stack file: %s", stackFilePath)
+		log.Printf("Deleted original stack file: %s", originalFilePath)
+	}
+
+	if err := os.Remove(effectiveFilePath); err != nil {
+		// Log warning but don't fail the operation
+		log.Printf("Warning: Failed to delete effective stack file %s: %v", effectiveFilePath, err)
+	} else {
+		log.Printf("Deleted effective stack file: %s", effectiveFilePath)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -856,7 +1347,6 @@ func HandleDeleteStack(w http.ResponseWriter, r *http.Request) {
 		"output":    string(output),
 	})
 }
-
 
 // getStacksData returns the combined stacks data (same as GET /api/stacks)
 // This is used to provide stacks data to Go templates
@@ -885,7 +1375,7 @@ func getStacksData() ([]map[string]interface{}, error) {
 	if err == nil {
 		// Collect YAML file stack names and paths
 		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".yml") {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".yml") && !strings.HasSuffix(entry.Name(), ".effective.yml") {
 				stackName := strings.TrimSuffix(entry.Name(), ".yml")
 				ymlStacks[stackName] = filepath.Join(stacksDir, entry.Name())
 			}
