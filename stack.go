@@ -650,10 +650,13 @@ func sanitizeEnvironmentVariable(envStr string) string {
 	sensitiveKeywords := []string{"PASSWD", "PASSWORD", "SECRET", "KEY", "TOKEN", "API_KEY", "APIKEY", "PRIVATE"}
 
 	isSensitive := false
-	for _, keyword := range sensitiveKeywords {
-		if strings.Contains(upperKey, keyword) {
-			isSensitive = true
-			break
+	// Exclude variables with "_FILE" suffix as they are file references, not actual passwords
+	if !strings.Contains(upperKey, "_FILE") {
+		for _, keyword := range sensitiveKeywords {
+			if strings.Contains(upperKey, keyword) {
+				isSensitive = true
+				break
+			}
 		}
 	}
 
@@ -696,6 +699,57 @@ func normalizeEnvKey(key string) string {
 	return strings.Trim(result.String(), "_")
 }
 
+// extractVariableReferences extracts variable names from strings containing ${XXX} or $XXX patterns
+func extractVariableReferences(value string) []string {
+	var variables []string
+
+	// Pattern 1: ${VAR_NAME}
+	i := 0
+	for i < len(value) {
+		if i+1 < len(value) && value[i] == '$' && value[i+1] == '{' {
+			// Found ${, now find the closing }
+			start := i + 2
+			end := start
+			for end < len(value) && value[end] != '}' {
+				end++
+			}
+			if end < len(value) {
+				varName := value[start:end]
+				if varName != "" {
+					variables = append(variables, varName)
+				}
+				i = end + 1
+				continue
+			}
+		}
+		// Pattern 2: $VAR_NAME (where VAR_NAME is uppercase letters, numbers, and underscores)
+		if value[i] == '$' && i+1 < len(value) {
+			start := i + 1
+			end := start
+			// Variable name must start with a letter or underscore
+			if (value[end] >= 'A' && value[end] <= 'Z') || (value[end] >= 'a' && value[end] <= 'z') || value[end] == '_' {
+				end++
+				// Continue with alphanumeric and underscore
+				for end < len(value) && ((value[end] >= 'A' && value[end] <= 'Z') ||
+					(value[end] >= 'a' && value[end] <= 'z') ||
+					(value[end] >= '0' && value[end] <= '9') ||
+					value[end] == '_') {
+					end++
+				}
+				varName := value[start:end]
+				if varName != "" {
+					variables = append(variables, varName)
+				}
+				i = end
+				continue
+			}
+		}
+		i++
+	}
+
+	return variables
+}
+
 // sanitizeComposePasswords sanitizes environment variables in a ComposeFile
 // by extracting plaintext passwords to prod.env and replacing them with variable references ${ENV_KEY}
 func sanitizeComposePasswords(compose *ComposeFile) {
@@ -727,10 +781,13 @@ func sanitizeComposePasswords(compose *ComposeFile) {
 				sensitiveKeywords := []string{"PASSWD", "PASSWORD", "SECRET", "KEY", "TOKEN", "API_KEY", "APIKEY", "PRIVATE"}
 
 				isSensitive := false
-				for _, keyword := range sensitiveKeywords {
-					if strings.Contains(upperKey, keyword) {
-						isSensitive = true
-						break
+				// Exclude variables with "_FILE" suffix as they are file references, not actual passwords
+				if !strings.Contains(upperKey, "_FILE") {
+					for _, keyword := range sensitiveKeywords {
+						if strings.Contains(upperKey, keyword) {
+							isSensitive = true
+							break
+						}
 					}
 				}
 
@@ -744,6 +801,19 @@ func sanitizeComposePasswords(compose *ComposeFile) {
 						log.Printf("Extracted password '%s' to prod.env from service '%s'", normalizedKey, serviceName)
 					}
 				}
+
+				// Check if value contains variable references (${XXX} or $XXX) and is not sensitive
+				if !isSensitive && value != "" {
+					extractedVars := extractVariableReferences(value)
+					for _, varName := range extractedVars {
+						// Only add if not already in prod.env
+						if _, exists := envVars[varName]; !exists {
+							envVars[varName] = "" // Add with empty value as placeholder
+							modified = true
+							log.Printf("Added environment variable '%s' to prod.env from service '%s'", varName, serviceName)
+						}
+					}
+				}
 			}
 
 			// Sanitize the environment variable
@@ -753,12 +823,53 @@ func sanitizeComposePasswords(compose *ComposeFile) {
 		compose.Services[serviceName] = service
 	}
 
+	// Also process labels for variable references
+	for serviceName, service := range compose.Services {
+		// Process labels if they exist
+		if service.Labels != nil {
+			if labelArray, ok := service.Labels.([]interface{}); ok {
+				for _, label := range labelArray {
+					if labelStr, ok := label.(string); ok {
+						// Extract variable references from label values
+						parts := strings.SplitN(labelStr, "=", 2)
+						if len(parts) == 2 {
+							value := parts[1]
+							extractedVars := extractVariableReferences(value)
+							for _, varName := range extractedVars {
+								// Only add if not already in prod.env
+								if _, exists := envVars[varName]; !exists {
+									envVars[varName] = "" // Add with empty value as placeholder
+									modified = true
+									log.Printf("Added environment variable '%s' to prod.env from service '%s' labels", varName, serviceName)
+								}
+							}
+						}
+					}
+				}
+			} else if labelMap, ok := service.Labels.(map[string]interface{}); ok {
+				for _, value := range labelMap {
+					if valueStr, ok := value.(string); ok {
+						extractedVars := extractVariableReferences(valueStr)
+						for _, varName := range extractedVars {
+							// Only add if not already in prod.env
+							if _, exists := envVars[varName]; !exists {
+								envVars[varName] = "" // Add with empty value as placeholder
+								modified = true
+								log.Printf("Added environment variable '%s' to prod.env from service '%s' labels", varName, serviceName)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Write back to prod.env if modified
 	if modified {
 		if err := writeProdEnv(prodEnvPath, envVars); err != nil {
 			log.Printf("Warning: Failed to write prod.env: %v", err)
 		} else {
-			log.Printf("Updated prod.env with extracted passwords")
+			log.Printf("Updated prod.env with extracted passwords and environment variables")
 		}
 	}
 }
