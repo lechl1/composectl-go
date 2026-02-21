@@ -98,6 +98,8 @@ func handleStackAPI(w http.ResponseWriter, r *http.Request) {
 		HandleStopStack(w, r)
 	} else if strings.HasSuffix(path, "/start") {
 		HandleStartStack(w, r)
+	} else if strings.HasSuffix(path, "/enrich") {
+		HandleEnrichStack(w, r)
 	} else if r.Method == http.MethodDelete {
 		HandleDeleteStack(w, r)
 	} else if r.Method == http.MethodGet {
@@ -995,6 +997,66 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleEnrichStack handles POST /api/enrich/{name}
+// Enriches the provided docker-compose YAML without modifying files or creating secrets
+func HandleEnrichStack(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract stack name from URL path
+	// Expected format: /api/stacks/{name}/enrich
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	if len(pathParts) < 3 || pathParts[0] != "api" || pathParts[1] != "stacks" {
+		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+		return
+	}
+
+	stackName := pathParts[2]
+	if stackName == "" {
+		http.Error(w, "Stack name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Read the request body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Error reading request body: %v", err)
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	// Validate YAML syntax before processing
+	var testCompose ComposeFile
+	if err := yaml.Unmarshal(body, &testCompose); err != nil {
+		log.Printf("Invalid YAML syntax for stack %s: %v", stackName, err)
+		http.Error(w, fmt.Sprintf("Invalid YAML syntax: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Validate that services section exists
+	if testCompose.Services == nil || len(testCompose.Services) == 0 {
+		log.Printf("No services defined in stack %s", stackName)
+		http.Error(w, "Invalid compose file: no services defined", http.StatusBadRequest)
+		return
+	}
+
+	// Enrich the YAML without modifying files or creating secrets
+	enrichedYAML, err := enrichComposeWithoutSideEffects(body)
+	if err != nil {
+		log.Printf("Error enriching compose file: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to process compose file: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Successfully enriched stack YAML for: %s (no files modified)", stackName)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write(enrichedYAML)
+}
+
 // HandlePostStack handles POST /api/stacks
 // Creates a new stack from the provided docker-compose YAML
 func HandlePostStack(w http.ResponseWriter, r *http.Request) {
@@ -1475,16 +1537,112 @@ func ensureSecretsInProdEnv(secretNames []string) error {
 	return nil
 }
 
-func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
+// enrichComposeWithoutSideEffects enriches a docker-compose YAML with Traefik labels,
+// networks, volumes, secrets, etc. but does NOT modify files on disk or create secrets in prod.env
+func enrichComposeWithoutSideEffects(yamlContent []byte) ([]byte, error) {
 	// Parse the YAML
 	var compose ComposeFile
 	if err := yaml.Unmarshal(yamlContent, &compose); err != nil {
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
-	// Process secrets first
-	processSecrets(&compose)
+	// Process secrets without side effects (no prod.env modification)
+	processSecretsWithoutSideEffects(&compose)
 
+	// Enrich each service with Traefik labels and other auto-additions
+	enrichServices(&compose)
+
+	// Marshal back to YAML with 2-space indentation
+	var buf strings.Builder
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+
+	if err := encoder.Encode(compose); err != nil {
+		return nil, fmt.Errorf("failed to marshal enriched YAML: %w", err)
+	}
+
+	if err := encoder.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close yaml encoder: %w", err)
+	}
+
+	return []byte(buf.String()), nil
+}
+
+// processSecretsWithoutSideEffects scans environment variables for /run/secrets/ references
+// and ensures the corresponding secrets are declared at both service and top level
+// WITHOUT creating entries in prod.env
+func processSecretsWithoutSideEffects(compose *ComposeFile) {
+	// Track all secrets that need to be declared at top level
+	requiredSecrets := make(map[string]bool)
+
+	// Process each service
+	for serviceName, service := range compose.Services {
+		// Track secrets needed by this service
+		serviceSecrets := make(map[string]bool)
+
+		// Scan environment variables for /run/secrets/ references
+		for _, envVar := range service.Environment {
+			// Parse the environment variable
+			parts := strings.SplitN(envVar, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+
+			value := parts[1]
+
+			// Check if the value matches /run/secrets/XXXX pattern
+			if strings.HasPrefix(value, "/run/secrets/") {
+				secretName := strings.TrimPrefix(value, "/run/secrets/")
+				if secretName != "" {
+					serviceSecrets[secretName] = true
+					requiredSecrets[secretName] = true
+				}
+			}
+		}
+
+		// Add secrets to service if needed
+		if len(serviceSecrets) > 0 {
+			// Get existing service secrets
+			existingSecrets := make(map[string]bool)
+			for _, secret := range service.Secrets {
+				existingSecrets[secret] = true
+			}
+
+			// Add missing secrets to service
+			for secretName := range serviceSecrets {
+				if !existingSecrets[secretName] {
+					service.Secrets = append(service.Secrets, secretName)
+					log.Printf("Auto-added secret '%s' to service '%s' (enrichment only)", secretName, serviceName)
+				}
+			}
+
+			// Update the service in the compose file
+			compose.Services[serviceName] = service
+		}
+	}
+
+	// Initialize top-level secrets map if needed
+	if compose.Secrets == nil {
+		compose.Secrets = make(map[string]ComposeSecret)
+	}
+
+	// Add missing secrets at top level
+	for secretName := range requiredSecrets {
+		if _, exists := compose.Secrets[secretName]; !exists {
+			compose.Secrets[secretName] = ComposeSecret{
+				Name:        secretName,
+				Environment: secretName,
+			}
+			log.Printf("Auto-added top-level secret declaration for '%s' (enrichment only)", secretName)
+		}
+	}
+
+	// NOTE: We do NOT call ensureSecretsInProdEnv here - that's the key difference!
+}
+
+// enrichServices enriches all services in a compose file with Traefik labels,
+// networks, volumes, sysctls, capabilities, timezone mounts, etc.
+func enrichServices(compose *ComposeFile) {
 	// Enrich each service with Traefik labels
 	for serviceName, service := range compose.Services {
 		// Convert labels to map if needed
@@ -1826,7 +1984,21 @@ func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
 	}
 
 	// Add undeclared networks and volumes
-	addUndeclaredNetworksAndVolumes(&compose)
+	addUndeclaredNetworksAndVolumes(compose)
+}
+
+func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
+	// Parse the YAML
+	var compose ComposeFile
+	if err := yaml.Unmarshal(yamlContent, &compose); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+	}
+
+	// Process secrets first
+	processSecrets(&compose)
+
+	// Enrich services
+	enrichServices(&compose)
 
 	// Marshal back to YAML
 	var buf strings.Builder
