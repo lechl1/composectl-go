@@ -763,6 +763,24 @@ func sanitizeComposePasswords(compose *ComposeFile) {
 	}
 }
 
+// sanitizeComposePasswordsWithoutExtraction sanitizes environment variables in a ComposeFile
+// by replacing plaintext passwords with variable references ${ENV_KEY}
+// WITHOUT extracting them to prod.env (assumes they're already there)
+func sanitizeComposePasswordsWithoutExtraction(compose *ComposeFile) {
+	// Process each service
+	for serviceName, service := range compose.Services {
+		// Process environment variables
+		envArray := normalizeEnvironment(service.Environment)
+		var sanitizedEnv []string
+		for _, envVar := range envArray {
+			// Sanitize the environment variable
+			sanitizedEnv = append(sanitizedEnv, sanitizeEnvironmentVariable(envVar))
+		}
+		service.Environment = sanitizedEnv
+		compose.Services[serviceName] = service
+	}
+}
+
 // reconstructComposeFromContainers creates a docker-compose YAML from container inspection data
 func reconstructComposeFromContainers(inspectData []map[string]interface{}) (string, error) {
 	compose := ComposeFile{
@@ -1149,28 +1167,21 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse and enrich the YAML with Traefik labels and auto-add undeclared networks/volumes
-	enrichedYAML, err := enrichComposeWithTraefikLabels(body)
-	if err != nil {
-		log.Printf("Error enriching compose file: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to process compose file: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	// Sanitize passwords in the original YAML for the .yml file
-	var sanitizedCompose ComposeFile
-	if err := yaml.Unmarshal(body, &sanitizedCompose); err != nil {
+	// First, sanitize passwords and extract them to prod.env
+	// This must be done BEFORE enrichment to capture plaintext passwords
+	var originalCompose ComposeFile
+	if err := yaml.Unmarshal(body, &originalCompose); err != nil {
 		log.Printf("Error parsing YAML for sanitization: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to parse YAML: %v", err), http.StatusBadRequest)
 		return
 	}
-	sanitizeComposePasswords(&sanitizedCompose)
+	sanitizeComposePasswords(&originalCompose)
 
-	// Marshal the sanitized version back to YAML
+	// Marshal the sanitized original version back to YAML for .yml file
 	var sanitizedBuf strings.Builder
 	sanitizedEncoder := yaml.NewEncoder(&sanitizedBuf)
 	sanitizedEncoder.SetIndent(2)
-	if err := sanitizedEncoder.Encode(sanitizedCompose); err != nil {
+	if err := sanitizedEncoder.Encode(originalCompose); err != nil {
 		log.Printf("Error encoding sanitized YAML: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to encode YAML: %v", err), http.StatusInternalServerError)
 		return
@@ -1181,6 +1192,42 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sanitizedYAML := []byte(sanitizedBuf.String())
+
+	// Now enrich the YAML with Traefik labels and auto-add undeclared networks/volumes
+	// Note: enrichComposeWithTraefikLabels works on the original body which has plaintext passwords,
+	// so we need to sanitize the enriched output as well
+	enrichedYAML, err := enrichComposeWithTraefikLabels(body)
+	if err != nil {
+		log.Printf("Error enriching compose file: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to process compose file: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Sanitize the enriched YAML as well (passwords were already extracted to prod.env above)
+	var enrichedCompose ComposeFile
+	if err := yaml.Unmarshal(enrichedYAML, &enrichedCompose); err != nil {
+		log.Printf("Error parsing enriched YAML for sanitization: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to parse enriched YAML: %v", err), http.StatusBadRequest)
+		return
+	}
+	// Sanitize without extracting again (passwords already in prod.env)
+	sanitizeComposePasswordsWithoutExtraction(&enrichedCompose)
+
+	// Marshal the sanitized enriched version back to YAML for .effective.yml file
+	var enrichedSanitizedBuf strings.Builder
+	enrichedSanitizedEncoder := yaml.NewEncoder(&enrichedSanitizedBuf)
+	enrichedSanitizedEncoder.SetIndent(2)
+	if err := enrichedSanitizedEncoder.Encode(enrichedCompose); err != nil {
+		log.Printf("Error encoding sanitized enriched YAML: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to encode YAML: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if err := enrichedSanitizedEncoder.Close(); err != nil {
+		log.Printf("Error closing sanitized enriched YAML encoder: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to encode YAML: %v", err), http.StatusInternalServerError)
+		return
+	}
+	enrichedSanitizedYAML := []byte(enrichedSanitizedBuf.String())
 
 	// Construct the file paths
 	originalFilePath := filepath.Join("stacks", stackName+".yml")
@@ -1200,8 +1247,8 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Write the effective file (enriched with Traefik labels and auto-added networks/volumes)
-	if err := os.WriteFile(effectiveFilePath, enrichedYAML, 0644); err != nil {
+	// Write the effective file (enriched and sanitized - no plaintext passwords)
+	if err := os.WriteFile(effectiveFilePath, enrichedSanitizedYAML, 0644); err != nil {
 		log.Printf("Error writing effective stack file %s: %v", effectiveFilePath, err)
 		http.Error(w, "Failed to write effective stack file", http.StatusInternalServerError)
 		return
