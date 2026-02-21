@@ -696,6 +696,73 @@ func normalizeEnvKey(key string) string {
 	return strings.Trim(result.String(), "_")
 }
 
+// sanitizeComposePasswords sanitizes environment variables in a ComposeFile
+// by extracting plaintext passwords to prod.env and replacing them with variable references ${ENV_KEY}
+func sanitizeComposePasswords(compose *ComposeFile) {
+	const prodEnvPath = "prod.env"
+
+	// Read existing prod.env
+	envVars, err := readProdEnv(prodEnvPath)
+	if err != nil {
+		log.Printf("Warning: Failed to read prod.env: %v", err)
+		envVars = make(map[string]string)
+	}
+
+	modified := false
+
+	// Process each service
+	for serviceName, service := range compose.Services {
+		// Process environment variables
+		envArray := normalizeEnvironment(service.Environment)
+		var sanitizedEnv []string
+		for _, envVar := range envArray {
+			// Split the environment variable into key and value
+			parts := strings.SplitN(envVar, "=", 2)
+			if len(parts) == 2 {
+				key := parts[0]
+				value := parts[1]
+
+				// Check if this is a sensitive variable
+				upperKey := strings.ToUpper(key)
+				sensitiveKeywords := []string{"PASSWD", "PASSWORD", "SECRET", "KEY", "TOKEN", "API_KEY", "APIKEY", "PRIVATE"}
+
+				isSensitive := false
+				for _, keyword := range sensitiveKeywords {
+					if strings.Contains(upperKey, keyword) {
+						isSensitive = true
+						break
+					}
+				}
+
+				// If sensitive and has a value, save to prod.env
+				if isSensitive && value != "" && !strings.HasPrefix(value, "${") && !strings.HasPrefix(value, "/run/secrets/") {
+					normalizedKey := normalizeEnvKey(key)
+					// Only save if not already in prod.env
+					if _, exists := envVars[normalizedKey]; !exists {
+						envVars[normalizedKey] = value
+						modified = true
+						log.Printf("Extracted password '%s' to prod.env from service '%s'", normalizedKey, serviceName)
+					}
+				}
+			}
+
+			// Sanitize the environment variable
+			sanitizedEnv = append(sanitizedEnv, sanitizeEnvironmentVariable(envVar))
+		}
+		service.Environment = sanitizedEnv
+		compose.Services[serviceName] = service
+	}
+
+	// Write back to prod.env if modified
+	if modified {
+		if err := writeProdEnv(prodEnvPath, envVars); err != nil {
+			log.Printf("Warning: Failed to write prod.env: %v", err)
+		} else {
+			log.Printf("Updated prod.env with extracted passwords")
+		}
+	}
+}
+
 // reconstructComposeFromContainers creates a docker-compose YAML from container inspection data
 func reconstructComposeFromContainers(inspectData []map[string]interface{}) (string, error) {
 	compose := ComposeFile{
@@ -1090,6 +1157,31 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sanitize passwords in the original YAML for the .yml file
+	var sanitizedCompose ComposeFile
+	if err := yaml.Unmarshal(body, &sanitizedCompose); err != nil {
+		log.Printf("Error parsing YAML for sanitization: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to parse YAML: %v", err), http.StatusBadRequest)
+		return
+	}
+	sanitizeComposePasswords(&sanitizedCompose)
+
+	// Marshal the sanitized version back to YAML
+	var sanitizedBuf strings.Builder
+	sanitizedEncoder := yaml.NewEncoder(&sanitizedBuf)
+	sanitizedEncoder.SetIndent(2)
+	if err := sanitizedEncoder.Encode(sanitizedCompose); err != nil {
+		log.Printf("Error encoding sanitized YAML: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to encode YAML: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if err := sanitizedEncoder.Close(); err != nil {
+		log.Printf("Error closing sanitized YAML encoder: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to encode YAML: %v", err), http.StatusInternalServerError)
+		return
+	}
+	sanitizedYAML := []byte(sanitizedBuf.String())
+
 	// Construct the file paths
 	originalFilePath := filepath.Join("stacks", stackName+".yml")
 	effectiveFilePath := filepath.Join("stacks", stackName+".effective.yml")
@@ -1101,8 +1193,8 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Write the original file (user-provided content)
-	if err := os.WriteFile(originalFilePath, body, 0644); err != nil {
+	// Write the original file (sanitized user-provided content without plaintext passwords)
+	if err := os.WriteFile(originalFilePath, sanitizedYAML, 0644); err != nil {
 		log.Printf("Error writing original stack file %s: %v", originalFilePath, err)
 		http.Error(w, "Failed to write original stack file", http.StatusInternalServerError)
 		return
