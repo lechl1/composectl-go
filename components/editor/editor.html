@@ -1,13 +1,14 @@
 <div id="editor"></div>
-<script>
-    import { EditorView, basicSetup } from 'https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.js';
-    import { yaml } from 'https://cdn.jsdelivr.net/npm/@codemirror/lang-yaml@6.1.1/dist/index.js';
-
+<script type="module">
+    import { EditorView } from "https://esm.sh/@codemirror/view@6"
+    import { yaml } from "https://esm.sh/@codemirror/lang-yaml@6"
+    document.(document.createElement("div"))
     (function() {
-        window.editor = window.editor || new EditorView({
+        var editor = new EditorView({
             doc: 'Hello, CodeMirror!',
-            extensions: [yaml(), basicSetup()],
+            extensions: [yaml()],
             parent: document.getElementById('editor')
         });
+        console.log(editor);
     })()
 </script>

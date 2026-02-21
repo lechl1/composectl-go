@@ -1,9 +1,32 @@
-<h1>Stack: {{ .stack }}</h1>
-<p>You are viewing the stack named: <strong>{{ .stack }}</strong></p>
-
-<div>
-{{ .Body }}
+<div class="w-full">
+    <table class="w-full text-left border-collapse text-left">
+    {{ range .stacks }}
+        <tbody>
+            <tr>
+                <th colspan="5" class="">
+                    {{ .name }}
+                </th>
+            </tr>
+        </tbody>
+        <tbody>
+            {{ range .containers }}
+                <tr>
+                    <td class="w-8">
+                        <img src="/thumbnail/{{ .Image }}" alt="{{ .Image }}" class="w-8 h-8 inline-block mr-2 bg-white">
+                    </td>
+                    <td>{{ .Names }}</td>
+                    <td>{{ .State }}</td>
+                    <td>{{ .Status }}</td>
+                    <td>
+                        {{ if eq .State "running" }}
+                            <button class="bg-red-500 text-white px-2 py-1 rounded" onclick="fetch('/stop/{{ .ID }}', { method: 'POST' }).then(() => location.reload())"></button>
+                        {{ else }}
+                            <button class="bg-green-500 text-white px-2 py-1 rounded" onclick="fetch('/start/{{ .ID }}', { method: 'POST' }).then(() => location.reload())">Start</button>
+                        {{ end }}
+                    </td>
+                </tr>
+            {{ end }}
+        </tbody>
+    {{ end }}
+    </table>
 </div>
-
-<pre>{{ .dockerps }}</pre>
-

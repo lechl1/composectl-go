@@ -1,5 +1,18 @@
-<nav class="stack-nav">
-    <ul>
-        <li><a href="/stacks/postgres">Postgres</a></li>
+<nav>
+    <ul class="flex flex-col gap-2">
+        {{range .stacks}}
+        <li class="bg-white text-black">
+            <a class="flex flex-col flex-nowrap" href="/stacks/{{.name}}">
+                {{ .name }}
+                {{ range .containers }}
+                    {{ if eq .State "running" }}
+                        🟢
+                    {{ else }}
+                        🔴
+                    {{ end }}
+                {{end}}
+            </a>
+        </li>
+        {{end}}
     </ul>
 </nav>

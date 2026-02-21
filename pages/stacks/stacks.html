@@ -1,3 +1,39 @@
-<div>
-    {{ .editor }}
+<script>
+    function saveAll() {
+        const editors = document.querySelectorAll('[data-editor]');
+        editors.forEach(editor => {
+            const endpoint = editor.getAttribute('data-endpoint');
+            const content = editor.CodeMirror.getValue();
+            put(endpoint, content);
+        });
+    }
+</script>
+<!--<div class="fixed z-1 bg-gray-900 w-full p-2 flex flex-row gap-2 justify-end">-->
+<!--    <button class="p-1 bg-gray-100 rounded" onclick="post('/api/stacks')">▶️</button>-->
+<!--    <button class="p-1 bg-gray-100 rounded" onclick="post('/api/stacks')">⏸️</button>-->
+<!--    <button class="p-1 bg-gray-100 rounded" onclick="del('/api/stacks')">🗑️</button>-->
+<!--    <button class="p-1 bg-gray-100 rounded">💾</button>-->
+<!--</div>-->
+<div class="w-full">
+    <table class="w-full text-left border-collapse text-white">
+        {{ range .stacks }}
+        <tbody>
+            <tr>
+                <td colspan="4">
+                    {{ $hasRunning := false }}
+                        {{ $hasNotRunning := false }}
+                        {{ range .containers }}
+                        {{ if eq .State "running" }}
+                        {{ $hasRunning = true }}
+                        {{ end }}
+                    {{ end }}
+                    <div data-editor="yaml" data-name="{{.name}}" data-running="{{ if $hasRunning }}true{{ else }}{{ end }}" data-endpoint="/api/stacks/{{.name}}">
+
+                    </div>
+                </td>
+            </tr>
+        </tbody>
+        {{ end }}
+    </table>
+
 </div>

@@ -52,16 +52,103 @@
             // Connect to WebSocket
             connectWebSocket();
         });
+        function get(uri) {
+            return fetch(`${uri}`, {method: 'GET'}).then(response => {
+                return response.text();
+            })
+        }
+        function post(uri) {
+            return fetch(`${uri}`, {method: 'POST'}).then(() => location.reload())
+        }
+        function put(uri, body) {
+            const options = {method: 'PUT'};
+            if (body !== undefined) {
+                options.headers = {'Content-Type': 'text/plain'};
+                options.body = body;
+                // Don't reload when auto-saving with body content
+                return fetch(`${uri}`, options);
+            }
+            return fetch(`${uri}`, options).then(() => location.reload())
+        }
+        function del(uri) {
+            return fetch(`${uri}`, {method: 'DELETE'}).then(() => location.reload())
+        }
     </script>
 </head>
-<body class="bg-gray-800 text-white">
-<div class="flex flex-row">
-    <div class="flex flex-1/4">
-        {{ .stacknav }}
-    </div>
-    <div class="flex flex-3/4">
+<body class="bg-gray-800 text-white w-full m-0">
+<div class="flex flex-row w-full">
+    <div class="flex w-full">
         {{ .Body }}
     </div>
 </div>
+<script type="importmap">
+    {
+      "imports": {
+        "style-mod": "https://esm.sh/style-mod",
+        "w3c-keyname": "https://esm.sh/w3c-keyname",
+        "crelt": "https://esm.sh/crelt",
+        "@marijn/find-cluster-break": "https://esm.sh/@marijn/find-cluster-break",
+        "@lezer/": "https://esm.sh/*@lezer/",
+        "@codemirror/": "https://esm.sh/*@codemirror/",
+        "codemirror": "https://esm.sh/*codemirror"
+      }
+    }
+</script>
+<script type="module">
+    import { basicSetup, EditorView } from "codemirror"
+    import { yaml } from "@codemirror/lang-yaml"
+    import { oneDark } from "@codemirror/theme-one-dark"
+    document.querySelectorAll("div[data-editor='yaml']").forEach(scriptElement => {
+        // Create a new div
+        const id = `editor-${Math.random().toString(36).substring(2, 9)}`;
+        const endpoint = scriptElement.getAttribute('data-endpoint') || '';
+        const running = scriptElement.getAttribute('data-running') === 'true';
+        const name = scriptElement.getAttribute('data-name') || '';
+        const containerElement = document.createElement('div');
+        containerElement.setAttribute("class", "flex flex-col w-full");
+        containerElement.innerHTML += `
+            <div class="flex flex-row w-full justify-end gap-2 mb-1 content-center">
+                <h1 class="content-center">${name}</h1>
+                <div class="flex flex-row w-full justify-end gap-2 mb-1 content-center">
+                    <button class="text-xl cursor-pointer" onclick="post('/api/stacks/${name}/${running ? 'stop' : 'start'}')">
+                        ${running ?'⏸':'▶️'}
+                    </button>
+                    <button class="text-xl cursor-pointer" onclick="del('/api/stacks/${name}')">🗑️</button>
+                    <button class="text-xl cursor-pointer">💾</button>
+                </div>
+            </div>
+            <div id="${id}"></div>
+        `;
+        scriptElement.parentNode.replaceChild(containerElement, scriptElement);
+
+        let saveTimeout = null;
+        const editorView = new EditorView({
+            doc: '',
+            extensions: [
+                yaml(),
+                basicSetup,
+                oneDark,
+
+                EditorView.domEventHandlers({
+                    keyup: (event, view) => {
+                        if (saveTimeout) {
+                            clearTimeout(saveTimeout);
+                        }
+                        saveTimeout = setTimeout(() => {
+                            put(`/api/stacks/${name}`, view.state.doc.toString());
+                        }, 1000);
+                    }
+                })
+            ],
+            parent: document.getElementById(id)
+        });
+
+        get(endpoint).then(text => {
+            editorView.dispatch({
+                changes: {from: 0, to: editorView.state.doc.length, insert: text}
+            });
+        });
+    });
+</script>
 </body>
 </html>
