@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -37,7 +38,9 @@ type ComposeVolume struct {
 
 // ComposeNetwork represents a network configuration
 type ComposeNetwork struct {
-	External bool `yaml:"external"`
+	External   bool              `yaml:"external,omitempty"`
+	Driver     string            `yaml:"driver,omitempty"`
+	DriverOpts map[string]string `yaml:"driver_opts,omitempty"`
 }
 
 // ComposeConfig represents a config configuration
@@ -527,8 +530,22 @@ func HandleStopStack(w http.ResponseWriter, r *http.Request) {
 	// Get the effective compose file path
 	composeFile := getEffectiveComposeFile(stackName)
 
-	// Execute docker compose stop command with the effective compose file
-	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", stackName, "stop")
+	// Replace environment variables in the YAML content
+	yamlContent, err := replaceEnvVarsInYAML(composeFile)
+	if err != nil {
+		log.Printf("Error replacing environment variables in compose file: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("Failed to process compose file: %v", err),
+		})
+		return
+	}
+
+	// Execute docker compose stop command with YAML piped via stdin
+	cmd := exec.Command("docker", "compose", "-f", "-", "-p", stackName, "stop")
+	cmd.Stdin = strings.NewReader(yamlContent)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Error stopping stack %s: %v, output: %s", stackName, err, string(output))
@@ -580,8 +597,22 @@ func HandleStartStack(w http.ResponseWriter, r *http.Request) {
 	// Get the effective compose file path
 	composeFile := getEffectiveComposeFile(stackName)
 
-	// Execute docker compose start command with the effective compose file
-	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", stackName, "start")
+	// Replace environment variables in the YAML content
+	yamlContent, err := replaceEnvVarsInYAML(composeFile)
+	if err != nil {
+		log.Printf("Error replacing environment variables in compose file: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("Failed to process compose file: %v", err),
+		})
+		return
+	}
+
+	// Execute docker compose start command with YAML piped via stdin
+	cmd := exec.Command("docker", "compose", "-f", "-", "-p", stackName, "start")
+	cmd.Stdin = strings.NewReader(yamlContent)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Error starting stack %s: %v, output: %s", stackName, err, string(output))
@@ -1398,35 +1429,177 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 		}
 		log.Printf("Successfully updated stack: %s (original: %s, effective: %s)", stackName, originalFilePath, effectiveFilePath)
 
-		var cmd *exec.Cmd
-		var actionName string
+		if !dryRun {
+			var cmd *exec.Cmd
+			var actionName string
 
-		switch action {
-		case ComposeActionNone:
-			// No action to perform
-		case ComposeActionUp:
-			actionName = "up"
-			cmd = exec.Command("docker", "compose", "-f", effectiveFilePath, "-p", stackName, "up", "-d", "--wait")
-		case ComposeActionDown:
-			actionName = "down"
-			cmd = exec.Command("docker", "compose", "-f", effectiveFilePath, "-p", stackName, "down")
-		}
+			switch action {
+			case ComposeActionNone:
+				// No action to perform
+			case ComposeActionUp, ComposeActionDown:
+				// Parse the effective compose file to get networks and volumes
+				var effectiveCompose ComposeFile
+				if err := yaml.Unmarshal(enrichedSanitizedYAML, &effectiveCompose); err != nil {
+					log.Printf("Error parsing effective compose file for stack %s: %v", stackName, err)
+					http.Error(w, fmt.Sprintf("Failed to parse effective compose file: %v", err), http.StatusInternalServerError)
+					return
+				}
 
-		if cmd != nil {
-			log.Printf("Executing docker compose %s for stack: %s", actionName, stackName)
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				log.Printf("Error executing docker compose %s for stack %s: %v, output: %s", actionName, stackName, err, string(output))
-				http.Error(w, fmt.Sprintf("Failed to execute docker compose %s: %v\nOutput: %s", actionName, err, string(output)), http.StatusInternalServerError)
-				return
+				// Create missing networks and volumes before docker compose up/down
+				if err := ensureNetworksExist(&effectiveCompose); err != nil {
+					log.Printf("Error ensuring networks exist for stack %s: %v", stackName, err)
+					http.Error(w, fmt.Sprintf("Failed to create networks: %v", err), http.StatusInternalServerError)
+					return
+				}
+
+				if err := ensureVolumesExist(&effectiveCompose); err != nil {
+					log.Printf("Error ensuring volumes exist for stack %s: %v", stackName, err)
+					http.Error(w, fmt.Sprintf("Failed to create volumes: %v", err), http.StatusInternalServerError)
+					return
+				}
+
+				// Replace environment variables in the effective YAML content
+				yamlContent, err := replaceEnvVarsInYAML(effectiveFilePath)
+				if err != nil {
+					log.Printf("Error replacing environment variables in compose file: %v", err)
+					http.Error(w, fmt.Sprintf("Failed to process compose file: %v", err), http.StatusInternalServerError)
+					return
+				}
+
+				if action == ComposeActionUp {
+					actionName = "up"
+					cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "up", "-d", "--wait")
+				} else {
+					actionName = "down"
+					cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down")
+				}
+
+				// Set stdin to the processed YAML content
+				cmd.Stdin = strings.NewReader(yamlContent)
 			}
-			log.Printf("Successfully executed docker compose %s for stack %s: %s", actionName, stackName, string(output))
+
+			if cmd != nil {
+				log.Printf("Executing docker compose %s for stack: %s", actionName, stackName)
+				output, err := cmd.CombinedOutput()
+				if err != nil {
+					log.Printf("Error executing docker compose %s for stack %s: %v, output: %s", actionName, stackName, err, string(output))
+					http.Error(w, fmt.Sprintf("Failed to execute docker compose %s: %v\nOutput: %s", actionName, err, string(output)), http.StatusInternalServerError)
+					return
+				}
+				log.Printf("Successfully executed docker compose %s for stack %s: %s", actionName, stackName, string(output))
+			}
 		}
 
 	}
 	w.Header().Set("Content-Type", "application/yaml")
 	w.WriteHeader(http.StatusOK)
 	w.Write(enrichedSanitizedYAML)
+}
+
+// ensureNetworksExist checks all networks defined in the compose file and creates missing ones
+// Networks are created in bridge mode if no driver is specified and external is false
+func ensureNetworksExist(compose *ComposeFile) error {
+	if compose.Networks == nil {
+		return nil
+	}
+
+	for networkName, networkConfig := range compose.Networks {
+		// Skip external networks as they should already exist
+		if networkConfig.External {
+			log.Printf("Skipping external network: %s", networkName)
+			continue
+		}
+
+		// Check if network exists
+		checkCmd := exec.Command("docker", "network", "inspect", networkName)
+		if err := checkCmd.Run(); err == nil {
+			log.Printf("Network already exists: %s", networkName)
+			continue
+		}
+
+		// Network doesn't exist, create it
+		// Use the driver specified in config, or default to "bridge"
+		driver := "bridge"
+		if networkConfig.Driver != "" {
+			driver = networkConfig.Driver
+		}
+
+		createArgs := []string{"network", "create", "--driver", driver}
+
+		// Add driver options if specified
+		if networkConfig.DriverOpts != nil {
+			for key, value := range networkConfig.DriverOpts {
+				createArgs = append(createArgs, "-o", fmt.Sprintf("%s=%s", key, value))
+			}
+		}
+
+		createArgs = append(createArgs, networkName)
+
+		createCmd := exec.Command("docker", createArgs...)
+		output, err := createCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to create network %s: %v, output: %s", networkName, err, string(output))
+		}
+		log.Printf("Successfully created network: %s with driver: %s", networkName, driver)
+	}
+
+	return nil
+}
+
+// ensureVolumesExist checks all volumes defined in the compose file and creates missing ones
+// Volumes are created with driver "local" if no driver is specified and external is false
+func ensureVolumesExist(compose *ComposeFile) error {
+	if compose.Volumes == nil {
+		return nil
+	}
+
+	for volumeName, volumeConfig := range compose.Volumes {
+		// Skip external volumes as they should already exist
+		if volumeConfig.External {
+			log.Printf("Skipping external volume: %s", volumeName)
+			continue
+		}
+
+		// Check if volume exists
+		checkCmd := exec.Command("docker", "volume", "inspect", volumeName)
+		if err := checkCmd.Run(); err == nil {
+			log.Printf("Volume already exists: %s", volumeName)
+			continue
+		}
+
+		// Volume doesn't exist, create it
+		// Use the driver specified in config, or default to "local"
+		driver := "local"
+		if volumeConfig.Driver != "" {
+			driver = volumeConfig.Driver
+		}
+
+		createArgs := []string{"volume", "create", "--driver", driver}
+
+		// Add driver options if specified
+		if volumeConfig.DriverOpts != nil {
+			for key, value := range volumeConfig.DriverOpts {
+				createArgs = append(createArgs, "-o", fmt.Sprintf("%s=%s", key, value))
+			}
+		}
+
+		// Add volume name or use the custom name if specified
+		targetName := volumeName
+		if volumeConfig.Name != "" {
+			targetName = volumeConfig.Name
+		}
+
+		createArgs = append(createArgs, targetName)
+
+		createCmd := exec.Command("docker", createArgs...)
+		output, err := createCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to create volume %s: %v, output: %s", targetName, err, string(output))
+		}
+		log.Printf("Successfully created volume: %s with driver: %s", targetName, driver)
+	}
+
+	return nil
 }
 
 // HandleEnrichStack handles POST /api/enrich/{name}
@@ -1897,6 +2070,87 @@ func ensureSecretsInProdEnv(secretNames []string) error {
 	return nil
 }
 
+// replaceEnvVarsInYAML reads a YAML file, replaces all ${VAR} placeholders with values from prod.env,
+// and returns the processed content as a string
+func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
+	const prodEnvPath = "prod.env"
+
+	// Read the YAML file
+	yamlContent, err := os.ReadFile(yamlFilePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read YAML file: %w", err)
+	}
+
+	// Read prod.env
+	envVars, err := readProdEnv(prodEnvPath)
+	if err != nil {
+		log.Printf("Warning: Failed to read prod.env: %v", err)
+		envVars = make(map[string]string)
+	}
+
+	// Convert to string for replacement
+	content := string(yamlContent)
+
+	// Replace all ${VAR} and $VAR patterns with actual values
+	// First handle ${VAR} format
+	re := regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+	content = re.ReplaceAllStringFunc(content, func(match string) string {
+		// Extract variable name from ${VAR}
+		varName := match[2 : len(match)-1]
+		if value, exists := envVars[varName]; exists {
+			return value
+		}
+		// If variable not found, leave it as is (or return empty string)
+		log.Printf("Warning: Environment variable %s not found in prod.env", varName)
+		return "" // Replace with empty string if not found
+	})
+
+	// Then handle $VAR format (but not if followed by { or already handled)
+	// This is a simpler approach - only replace $VAR when it's clearly a standalone variable
+	re2 := regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)(?:[^A-Za-z0-9_]|$)`)
+	content = re2.ReplaceAllStringFunc(content, func(match string) string {
+		// Extract variable name and the trailing character
+		varName := match[1:]
+		trailingChar := ""
+		if len(varName) > 0 && !regexp.MustCompile(`[A-Za-z0-9_]`).MatchString(string(varName[len(varName)-1])) {
+			trailingChar = string(varName[len(varName)-1])
+			varName = varName[:len(varName)-1]
+		}
+		if value, exists := envVars[varName]; exists {
+			return value + trailingChar
+		}
+		log.Printf("Warning: Environment variable %s not found in prod.env", varName)
+		return trailingChar // Return just the trailing char if variable not found
+	})
+
+	return content, nil
+}
+
+// setEnvFromProdEnv loads environment variables from prod.env and sets them on the command
+// DEPRECATED: This function is no longer used. We now replace variables directly in YAML and pipe to docker compose.
+func setEnvFromProdEnv(cmd *exec.Cmd) error {
+	const prodEnvPath = "prod.env"
+
+	// Read prod.env
+	envVars, err := readProdEnv(prodEnvPath)
+	if err != nil {
+		log.Printf("Warning: Failed to read prod.env: %v", err)
+		// Continue with current environment
+		cmd.Env = os.Environ()
+		return nil
+	}
+
+	// Start with current environment
+	cmd.Env = os.Environ()
+
+	// Add/override with prod.env variables
+	for key, value := range envVars {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	return nil
+}
+
 // enrichComposeWithoutSideEffects enriches a docker-compose YAML with Traefik labels,
 // networks, volumes, secrets, etc. but does NOT modify files on disk or create secrets in prod.env
 func enrichComposeWithoutSideEffects(yamlContent []byte) ([]byte, error) {
@@ -2227,8 +2481,23 @@ func enrichServices(compose *ComposeFile) {
 		// Add homelab network if not present
 		if !hasHomelabNetwork {
 			networksList = append(networksList, "homelab")
-			service.Networks = networksList
 			log.Printf("Auto-added homelab network to service %s", serviceName)
+		}
+
+		// Update service networks
+		if len(networksList) > 0 {
+			service.Networks = networksList
+		}
+
+		// Add all referenced networks to top-level networks definition with external: true
+		if compose.Networks == nil {
+			compose.Networks = make(map[string]ComposeNetwork)
+		}
+		for _, networkName := range networksList {
+			if _, exists := compose.Networks[networkName]; !exists {
+				compose.Networks[networkName] = ComposeNetwork{External: true}
+				log.Printf("Auto-added network %s to top-level networks (marked as external) for service %s", networkName, serviceName)
+			}
 		}
 
 		// Automatically add timezone mounts if files exist on host and not already mounted
@@ -2545,8 +2814,22 @@ func HandleDeleteStack(w http.ResponseWriter, r *http.Request) {
 	// Get the effective compose file path
 	composeFile := getEffectiveComposeFile(stackName)
 
-	// Execute docker compose down command to remove all containers using effective file
-	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", stackName, "down")
+	// Replace environment variables in the YAML content
+	yamlContent, err := replaceEnvVarsInYAML(composeFile)
+	if err != nil {
+		log.Printf("Error replacing environment variables in compose file: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   fmt.Sprintf("Failed to process compose file: %v", err),
+		})
+		return
+	}
+
+	// Execute docker compose down command to remove all containers using piped YAML
+	cmd := exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down")
+	cmd.Stdin = strings.NewReader(yamlContent)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Error deleting stack %s: %v, output: %s", stackName, err, string(output))
