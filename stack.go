@@ -1694,8 +1694,13 @@ func processSecrets(compose *ComposeFile, dryRun bool) {
 			if strings.HasPrefix(value, "/run/secrets/") {
 				secretName := strings.TrimPrefix(value, "/run/secrets/")
 				if secretName != "" {
-					serviceSecrets[secretName] = true
-					requiredSecrets[secretName] = true
+					// Normalize the secret name by extracting the variable name from ${XXX} if present
+					normalizedSecretName := secretName
+					if strings.HasPrefix(secretName, "${") && strings.HasSuffix(secretName, "}") {
+						normalizedSecretName = secretName[2 : len(secretName)-1]
+					}
+					serviceSecrets[normalizedSecretName] = true
+					requiredSecrets[normalizedSecretName] = true
 				}
 			}
 		}
