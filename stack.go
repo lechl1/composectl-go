@@ -19,6 +19,37 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// handleStackAPI routes stack API requests to appropriate handlers
+func handleStackAPI(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+
+	// Handle listing all stacks at /api/stacks
+	if path == "/api/stacks" || path == "/api/stacks/" {
+		if r.Method == http.MethodGet {
+			HandleListStacks(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	if strings.HasSuffix(path, "/stop") {
+		HandleStopStack(w, r)
+	} else if strings.HasSuffix(path, "/start") {
+		HandleStartStack(w, r)
+	} else if strings.HasSuffix(path, "/enrich") {
+		HandleEnrichStack(w, r)
+	} else if r.Method == http.MethodDelete {
+		HandleDeleteStack(w, r)
+	} else if r.Method == http.MethodGet {
+		HandleGetStack(w, r)
+	} else if r.Method == http.MethodPut {
+		HandlePutStack(w, r)
+	} else {
+		http.Error(w, "Not found", http.StatusNotFound)
+	}
+}
+
 // ComposeFile represents a docker-compose.yml structure
 type ComposeFile struct {
 	Services map[string]ComposeService `yaml:"services"`
@@ -159,37 +190,6 @@ func setEnvironmentAsArray(service *ComposeService, envArray []string) {
 		service.Environment = nil
 	} else {
 		service.Environment = envArray
-	}
-}
-
-// handleStackAPI routes stack API requests to appropriate handlers
-func handleStackAPI(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-
-	// Handle listing all stacks at /api/stacks
-	if path == "/api/stacks" || path == "/api/stacks/" {
-		if r.Method == http.MethodGet {
-			HandleListStacks(w, r)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-		return
-	}
-
-	if strings.HasSuffix(path, "/stop") {
-		HandleStopStack(w, r)
-	} else if strings.HasSuffix(path, "/start") {
-		HandleStartStack(w, r)
-	} else if strings.HasSuffix(path, "/enrich") {
-		HandleEnrichStack(w, r)
-	} else if r.Method == http.MethodDelete {
-		HandleDeleteStack(w, r)
-	} else if r.Method == http.MethodGet {
-		HandleGetStack(w, r)
-	} else if r.Method == http.MethodPut {
-		HandlePutStack(w, r)
-	} else {
-		http.Error(w, "Not found", http.StatusNotFound)
 	}
 }
 
@@ -506,7 +506,7 @@ func getEffectiveComposeFile(stackName string) string {
 // HandleStopStack handles POST /api/stacks/{name}/stop
 // Stops all containers in a Docker Compose stack
 func HandleStopStack(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodPut {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -525,55 +525,13 @@ func HandleStopStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Stopping stack: %s", stackName)
-
-	// Get the effective compose file path
-	composeFile := getEffectiveComposeFile(stackName)
-
-	// Replace environment variables in the YAML content
-	yamlContent, err := replaceEnvVarsInYAML(composeFile)
-	if err != nil {
-		log.Printf("Error replacing environment variables in compose file: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("Failed to process compose file: %v", err),
-		})
-		return
-	}
-
-	// Execute docker compose stop command with YAML piped via stdin
-	cmd := exec.Command("docker", "compose", "-f", "-", "-p", stackName, "stop")
-	cmd.Stdin = strings.NewReader(yamlContent)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("Error stopping stack %s: %v, output: %s", stackName, err, string(output))
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("Failed to stop stack: %v", err),
-			"output":  string(output),
-		})
-		return
-	}
-
-	log.Printf("Successfully stopped stack: %s", stackName)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":   true,
-		"stackName": stackName,
-		"message":   "Stack stopped successfully",
-		"output":    string(output),
-	})
+	HandleDockerComposeFile(w, r, stackName, false, ComposeActionDown)
 }
 
 // HandleStartStack handles POST /api/stacks/{name}/start
 // Starts all containers in a Docker Compose stack
 func HandleStartStack(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodPut {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -593,49 +551,7 @@ func HandleStartStack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Starting stack: %s", stackName)
-
-	// Get the effective compose file path
-	composeFile := getEffectiveComposeFile(stackName)
-
-	// Replace environment variables in the YAML content
-	yamlContent, err := replaceEnvVarsInYAML(composeFile)
-	if err != nil {
-		log.Printf("Error replacing environment variables in compose file: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("Failed to process compose file: %v", err),
-		})
-		return
-	}
-
-	// Execute docker compose up -d command with YAML piped via stdin
-	cmd := exec.Command("docker", "compose", "-f", "-", "-p", stackName, "up", "-d", "--wait", "--remove-orphans")
-	cmd.Stdin = strings.NewReader(yamlContent)
-	output, err := cmd.CombinedOutput()
-
-	if err != nil {
-		log.Printf("Error starting stack %s: %v, output: %s", stackName, err, string(output))
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("Failed to start stack: %v", err),
-			"output":  string(output),
-		})
-		return
-	}
-
-	log.Printf("Successfully started stack: %s", stackName)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":   true,
-		"stackName": stackName,
-		"message":   "Stack started successfully",
-		"output":    string(output),
-	})
+	HandleDockerComposeFile(w, r, stackName, false, ComposeActionUp)
 }
 
 // findContainersByProjectName finds all containers that match the given project name label

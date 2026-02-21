@@ -110,7 +110,7 @@
             <div class="flex flex-row w-full justify-end gap-2 mb-1 content-center">
                 <h1 class="content-center">${name}</h1>
                 <div class="flex flex-row w-full justify-end gap-2 mb-1 content-center">
-                    <button class="text-xl cursor-pointer" onclick="post('/api/stacks/${name}/${running ? 'stop' : 'start'}')">
+                    <button class="text-xl cursor-pointer" onclick="put('/api/stacks/${name}/${running ? 'stop' : 'start'}', )">
                         ${running ?'⏸':'▶️'}
                     </button>
                     <button class="text-xl cursor-pointer" onclick="del('/api/stacks/${name}')">🗑️</button>
