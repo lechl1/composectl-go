@@ -68,14 +68,76 @@ type ComposeService struct {
 	Restart       string                 `yaml:"restart,omitempty"`
 	Volumes       []string               `yaml:"volumes,omitempty"`
 	Ports         []string               `yaml:"ports,omitempty"`
-	Environment   []string               `yaml:"environment,omitempty"`
-	Networks      interface{}            `yaml:"networks,omitempty"` // Can be array or map
-	Labels        interface{}            `yaml:"labels,omitempty"`   // Can be array or map
-	Command       interface{}            `yaml:"command,omitempty"`  // Can be string or array
+	Environment   interface{}            `yaml:"environment,omitempty"` // Can be array or map
+	Networks      interface{}            `yaml:"networks,omitempty"`    // Can be array or map
+	Labels        interface{}            `yaml:"labels,omitempty"`      // Can be array or map
+	Command       interface{}            `yaml:"command,omitempty"`     // Can be string or array
 	Configs       []ComposeServiceConfig `yaml:"configs,omitempty"`
 	CapAdd        []string               `yaml:"cap_add,omitempty"`
 	Sysctls       interface{}            `yaml:"sysctls,omitempty"` // Can be array or map
 	Secrets       []string               `yaml:"secrets,omitempty"`
+}
+
+// normalizeEnvironment converts environment variables from map or array format to array format
+// Returns an array of strings in "KEY=VALUE" format
+func normalizeEnvironment(env interface{}) []string {
+	if env == nil {
+		return nil
+	}
+
+	// If it's already an array
+	if envArray, ok := env.([]interface{}); ok {
+		result := make([]string, 0, len(envArray))
+		for _, item := range envArray {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+		return result
+	}
+
+	// If it's a map (from YAML)
+	if envMap, ok := env.(map[string]interface{}); ok {
+		result := make([]string, 0, len(envMap))
+		// Sort keys for consistent output
+		keys := make([]string, 0, len(envMap))
+		for k := range envMap {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, key := range keys {
+			value := envMap[key]
+			// Convert value to string
+			var valueStr string
+			switch v := value.(type) {
+			case string:
+				valueStr = v
+			case int, int64, float64, bool:
+				valueStr = fmt.Sprintf("%v", v)
+			default:
+				valueStr = fmt.Sprintf("%v", v)
+			}
+			result = append(result, fmt.Sprintf("%s=%s", key, valueStr))
+		}
+		return result
+	}
+
+	// If it's already a []string (shouldn't happen after unmarshal, but just in case)
+	if envStrings, ok := env.([]string); ok {
+		return envStrings
+	}
+
+	return nil
+}
+
+// setEnvironmentAsArray converts environment to array format and updates the service
+func setEnvironmentAsArray(service *ComposeService, envArray []string) {
+	if len(envArray) == 0 {
+		service.Environment = nil
+	} else {
+		service.Environment = envArray
+	}
 }
 
 // handleStackAPI routes stack API requests to appropriate handlers
@@ -738,7 +800,8 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 
 		// Check in environment variables if port not found yet
 		if !usesHTTPPort && service.Environment != nil {
-			for _, env := range service.Environment {
+			envArray := normalizeEnvironment(service.Environment)
+			for _, env := range envArray {
 				envUpper := strings.ToUpper(env)
 				for _, httpPort := range standardHTTPPorts {
 					if strings.Contains(envUpper, "PORT="+httpPort) ||
@@ -1251,7 +1314,8 @@ func getLowestPrivilegedPort(service ComposeService, labelsMap map[string]string
 	}
 
 	// Check environment variables for port values
-	for _, env := range service.Environment {
+	envArray := normalizeEnvironment(service.Environment)
+	for _, env := range envArray {
 		// Look for PORT=xxx or similar patterns
 		if strings.Contains(strings.ToUpper(env), "PORT") {
 			parts := strings.SplitN(env, "=", 2)
@@ -1334,7 +1398,8 @@ func processSecrets(compose *ComposeFile) {
 		serviceSecrets := make(map[string]bool)
 
 		// Scan environment variables for /run/secrets/ references
-		for _, envVar := range service.Environment {
+		envArray := normalizeEnvironment(service.Environment)
+		for _, envVar := range envArray {
 			// Parse the environment variable
 			parts := strings.SplitN(envVar, "=", 2)
 			if len(parts) != 2 {
@@ -1581,7 +1646,8 @@ func processSecretsWithoutSideEffects(compose *ComposeFile) {
 		serviceSecrets := make(map[string]bool)
 
 		// Scan environment variables for /run/secrets/ references
-		for _, envVar := range service.Environment {
+		envArray := normalizeEnvironment(service.Environment)
+		for _, envVar := range envArray {
 			// Parse the environment variable
 			parts := strings.SplitN(envVar, "=", 2)
 			if len(parts) != 2 {
@@ -1940,7 +2006,8 @@ func enrichServices(compose *ComposeFile) {
 
 		// Automatically add TZ environment variable if not already set
 		hasTZ := false
-		for _, env := range service.Environment {
+		envArray := normalizeEnvironment(service.Environment)
+		for _, env := range envArray {
 			// Check if TZ is already defined
 			if strings.HasPrefix(env, "TZ=") {
 				hasTZ = true
@@ -1949,7 +2016,8 @@ func enrichServices(compose *ComposeFile) {
 		}
 
 		if !hasTZ {
-			service.Environment = append(service.Environment, "TZ=${TZ}")
+			envArray = append(envArray, "TZ=${TZ}")
+			setEnvironmentAsArray(&service, envArray)
 			log.Printf("Auto-added TZ=${TZ} environment variable to service %s", serviceName)
 		}
 
