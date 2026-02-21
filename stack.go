@@ -2149,6 +2149,108 @@ func enrichServices(compose *ComposeFile) {
 	addUndeclaredNetworksAndVolumes(compose)
 }
 
+// getDockerSocketPath returns the appropriate Docker socket path
+// Checks if /run/user/<UID>/docker.sock exists, otherwise returns /var/run/docker.sock
+func getDockerSocketPath() string {
+	// Get the current user's UID
+	uid := os.Getuid()
+	userSocket := fmt.Sprintf("/run/user/%d/docker.sock", uid)
+
+	// Check if user-specific socket exists
+	if _, err := os.Stat(userSocket); err == nil {
+		return userSocket
+	}
+
+	// Fallback to system socket
+	return "/var/run/docker.sock"
+}
+
+// getCurrentUserID returns the current user's UID as a string
+func getCurrentUserID() string {
+	return fmt.Sprintf("%d", os.Getuid())
+}
+
+// getCurrentGroupID returns the current user's GID as a string
+func getCurrentGroupID() string {
+	return fmt.Sprintf("%d", os.Getgid())
+}
+
+// replacePlaceholders replaces DOCKER_SOCK, DOCKER_SOCKET, USER_ID, and USER_GID placeholders with the appropriate values
+// Handles both literal strings and environment variable syntax (${VAR}, $VAR)
+func replacePlaceholders(compose *ComposeFile) {
+	dockerSocket := getDockerSocketPath()
+	userID := getCurrentUserID()
+	groupID := getCurrentGroupID()
+
+	// Process each service
+	for serviceName, service := range compose.Services {
+		// Replace in volumes
+		if len(service.Volumes) > 0 {
+			for i, volume := range service.Volumes {
+				// Replace both literal and environment variable syntax
+				volume = strings.ReplaceAll(volume, "${DOCKER_SOCK}", dockerSocket)
+				volume = strings.ReplaceAll(volume, "${DOCKER_SOCKET}", dockerSocket)
+				volume = strings.ReplaceAll(volume, "$DOCKER_SOCK", dockerSocket)
+				volume = strings.ReplaceAll(volume, "$DOCKER_SOCKET", dockerSocket)
+				volume = strings.ReplaceAll(volume, "${USER_ID}", userID)
+				volume = strings.ReplaceAll(volume, "$USER_ID", userID)
+				volume = strings.ReplaceAll(volume, "${USERID}", userID)
+				volume = strings.ReplaceAll(volume, "$USERID", userID)
+				volume = strings.ReplaceAll(volume, "${USER_GID}", groupID)
+				volume = strings.ReplaceAll(volume, "$USER_GID", groupID)
+				volume = strings.ReplaceAll(volume, "${USERGID}", groupID)
+				volume = strings.ReplaceAll(volume, "$USERGID", groupID)
+				volume = strings.ReplaceAll(volume, "${UID}", groupID)
+				volume = strings.ReplaceAll(volume, "$UID", groupID)
+				volume = strings.ReplaceAll(volume, "${GID}", groupID)
+				volume = strings.ReplaceAll(volume, "$GID", groupID)
+				service.Volumes[i] = volume
+			}
+		}
+
+		// Replace in environment variables
+		if service.Environment != nil {
+			// Handle map format
+			if envMap, ok := service.Environment.(map[string]interface{}); ok {
+				for key, value := range envMap {
+					if strValue, ok := value.(string); ok {
+						strValue = strings.ReplaceAll(strValue, "${DOCKER_SOCK}", dockerSocket)
+						strValue = strings.ReplaceAll(strValue, "${DOCKER_SOCKET}", dockerSocket)
+						strValue = strings.ReplaceAll(strValue, "$DOCKER_SOCK", dockerSocket)
+						strValue = strings.ReplaceAll(strValue, "$DOCKER_SOCKET", dockerSocket)
+						strValue = strings.ReplaceAll(strValue, "${USER_ID}", userID)
+						strValue = strings.ReplaceAll(strValue, "$USER_ID", userID)
+						strValue = strings.ReplaceAll(strValue, "${USER_GID}", groupID)
+						strValue = strings.ReplaceAll(strValue, "$USER_GID", groupID)
+						envMap[key] = strValue
+					}
+				}
+			}
+			// Handle array format
+			if envArray, ok := service.Environment.([]interface{}); ok {
+				for i, item := range envArray {
+					if strValue, ok := item.(string); ok {
+						strValue = strings.ReplaceAll(strValue, "${DOCKER_SOCK}", dockerSocket)
+						strValue = strings.ReplaceAll(strValue, "${DOCKER_SOCKET}", dockerSocket)
+						strValue = strings.ReplaceAll(strValue, "$DOCKER_SOCK", dockerSocket)
+						strValue = strings.ReplaceAll(strValue, "$DOCKER_SOCKET", dockerSocket)
+						strValue = strings.ReplaceAll(strValue, "${USER_ID}", userID)
+						strValue = strings.ReplaceAll(strValue, "$USER_ID", userID)
+						strValue = strings.ReplaceAll(strValue, "${USER_GID}", groupID)
+						strValue = strings.ReplaceAll(strValue, "$USER_GID", groupID)
+						envArray[i] = strValue
+					}
+				}
+			}
+		}
+
+		// Update the service back to the map
+		compose.Services[serviceName] = service
+	}
+
+	log.Printf("Replaced placeholders - DOCKER_SOCK/DOCKER_SOCKET: %s, USER_ID: %s, USER_GID: %s", dockerSocket, userID, groupID)
+}
+
 func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
 	// Parse the YAML
 	var compose ComposeFile
@@ -2158,6 +2260,9 @@ func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
 
 	// Process secrets first
 	processSecrets(&compose)
+
+	// Replace placeholders (DOCKER_SOCK, DOCKER_SOCKET, etc.)
+	replacePlaceholders(&compose)
 
 	// Enrich services
 	enrichServices(&compose)
