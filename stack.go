@@ -610,10 +610,11 @@ func HandleStartStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Execute docker compose start command with YAML piped via stdin
-	cmd := exec.Command("docker", "compose", "-f", "-", "-p", stackName, "start")
+	// Execute docker compose up -d command with YAML piped via stdin
+	cmd := exec.Command("docker", "compose", "-f", "-", "-p", stackName, "up", "-d", "--wait", "--remove-orphans")
 	cmd.Stdin = strings.NewReader(yamlContent)
 	output, err := cmd.CombinedOutput()
+
 	if err != nil {
 		log.Printf("Error starting stack %s: %v, output: %s", stackName, err, string(output))
 		w.Header().Set("Content-Type", "application/json")
@@ -626,13 +627,13 @@ func HandleStartStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Successfully deleted stack: %s", stackName)
+	log.Printf("Successfully started stack: %s", stackName)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":   true,
 		"stackName": stackName,
-		"message":   "Stack deleted successfully",
+		"message":   "Stack started successfully",
 		"output":    string(output),
 	})
 }
