@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -256,6 +257,76 @@ func getStacksList() ([]map[string]interface{}, error) {
 	}
 
 	return runningStacks, nil
+}
+
+// streamCommandOutput executes a command and streams its stdout and stderr to the HTTP response
+// using chunked transfer encoding. Returns error if command execution fails.
+// Note: Headers should be set by the caller before calling this function if multiple commands are streamed.
+func streamCommandOutput(w http.ResponseWriter, cmd *exec.Cmd) error {
+
+	// Get pipes for stdout and stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stderr pipe: %w", err)
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start command: %w", err)
+	}
+
+	// Use WaitGroup to wait for both streams to complete
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Stream stdout
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			line := scanner.Text()
+			fmt.Fprintf(w, "[STDOUT] %s\n", line)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+	}()
+
+	// Stream stderr
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			line := scanner.Text()
+			fmt.Fprintf(w, "[STDERR] %s\n", line)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+	}()
+
+	// Wait for both streams to complete
+	wg.Wait()
+
+	// Wait for command to finish and get exit status
+	if err := cmd.Wait(); err != nil {
+		fmt.Fprintf(w, "[ERROR] Command failed: %v\n", err)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		return err
+	}
+
+	fmt.Fprintf(w, "[DONE] Command completed successfully\n")
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	return nil
 }
 
 // HandleListStacks handles GET /api/stacks
@@ -1362,16 +1433,29 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 					return
 				}
 
+				// Set up streaming headers before creating networks/volumes
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				w.Header().Set("Transfer-Encoding", "chunked")
+				w.Header().Set("X-Content-Type-Options", "nosniff")
+				w.WriteHeader(http.StatusOK)
+
 				// Create missing networks and volumes before docker compose up/down
-				if err := ensureNetworksExist(&effectiveCompose); err != nil {
+				// Pass ResponseWriter to stream output
+				if err := ensureNetworksExist(&effectiveCompose, w); err != nil {
 					log.Printf("Error ensuring networks exist for stack %s: %v", stackName, err)
-					http.Error(w, fmt.Sprintf("Failed to create networks: %v", err), http.StatusInternalServerError)
+					fmt.Fprintf(w, "[ERROR] Failed to create networks: %v\n", err)
+					if flusher, ok := w.(http.Flusher); ok {
+						flusher.Flush()
+					}
 					return
 				}
 
-				if err := ensureVolumesExist(&effectiveCompose); err != nil {
+				if err := ensureVolumesExist(&effectiveCompose, w); err != nil {
 					log.Printf("Error ensuring volumes exist for stack %s: %v", stackName, err)
-					http.Error(w, fmt.Sprintf("Failed to create volumes: %v", err), http.StatusInternalServerError)
+					fmt.Fprintf(w, "[ERROR] Failed to create volumes: %v\n", err)
+					if flusher, ok := w.(http.Flusher); ok {
+						flusher.Flush()
+					}
 					return
 				}
 
@@ -1379,7 +1463,10 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 				yamlContent, err := replaceEnvVarsInYAML(effectiveFilePath)
 				if err != nil {
 					log.Printf("Error replacing environment variables in compose file: %v", err)
-					http.Error(w, fmt.Sprintf("Failed to process compose file: %v", err), http.StatusInternalServerError)
+					fmt.Fprintf(w, "[ERROR] Failed to process compose file: %v\n", err)
+					if flusher, ok := w.(http.Flusher); ok {
+						flusher.Flush()
+					}
 					return
 				}
 
@@ -1397,13 +1484,16 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 
 			if cmd != nil {
 				log.Printf("Executing docker compose %s for stack: %s", actionName, stackName)
-				output, err := cmd.CombinedOutput()
-				if err != nil {
-					log.Printf("Error executing docker compose %s for stack %s: %v, output: %s", actionName, stackName, err, string(output))
-					http.Error(w, fmt.Sprintf("Failed to execute docker compose %s: %v\nOutput: %s", actionName, err, string(output)), http.StatusInternalServerError)
+
+				// Stream the output (headers already set above)
+				if err := streamCommandOutput(w, cmd); err != nil {
+					log.Printf("Error executing docker compose %s for stack %s: %v", actionName, stackName, err)
+					// Error already written to response stream
 					return
 				}
-				log.Printf("Successfully executed docker compose %s for stack %s: %s", actionName, stackName, string(output))
+				log.Printf("Successfully executed docker compose %s for stack %s", actionName, stackName)
+				// Response already sent via streaming, so return early
+				return
 			}
 		}
 
@@ -1415,7 +1505,8 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 
 // ensureNetworksExist checks all networks defined in the compose file and creates missing ones
 // Networks are created in bridge mode if no driver is specified and external is false
-func ensureNetworksExist(compose *ComposeFile) error {
+// If w is not nil, output is streamed to the HTTP response
+func ensureNetworksExist(compose *ComposeFile, w http.ResponseWriter) error {
 	if compose.Networks == nil {
 		return nil
 	}
@@ -1424,6 +1515,12 @@ func ensureNetworksExist(compose *ComposeFile) error {
 		// Skip external networks as they should already exist
 		if networkConfig.External {
 			log.Printf("Skipping external network: %s", networkName)
+			if w != nil {
+				fmt.Fprintf(w, "[INFO] Skipping external network: %s\n", networkName)
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+			}
 			continue
 		}
 
@@ -1431,6 +1528,12 @@ func ensureNetworksExist(compose *ComposeFile) error {
 		checkCmd := exec.Command("docker", "network", "inspect", networkName)
 		if err := checkCmd.Run(); err == nil {
 			log.Printf("Network already exists: %s", networkName)
+			if w != nil {
+				fmt.Fprintf(w, "[INFO] Network already exists: %s\n", networkName)
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+			}
 			continue
 		}
 
@@ -1453,10 +1556,26 @@ func ensureNetworksExist(compose *ComposeFile) error {
 		createArgs = append(createArgs, networkName)
 
 		createCmd := exec.Command("docker", createArgs...)
-		output, err := createCmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to create network %s: %v, output: %s", networkName, err, string(output))
+
+		// Stream output if ResponseWriter is provided
+		if w != nil {
+			log.Printf("Creating network: %s with driver: %s", networkName, driver)
+			fmt.Fprintf(w, "[INFO] Creating network: %s with driver: %s\n", networkName, driver)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+
+			if err := streamCommandOutput(w, createCmd); err != nil {
+				return fmt.Errorf("failed to create network %s: %v", networkName, err)
+			}
+		} else {
+			// Fall back to non-streaming for backward compatibility
+			output, err := createCmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to create network %s: %v, output: %s", networkName, err, string(output))
+			}
 		}
+
 		log.Printf("Successfully created network: %s with driver: %s", networkName, driver)
 	}
 
@@ -1465,7 +1584,8 @@ func ensureNetworksExist(compose *ComposeFile) error {
 
 // ensureVolumesExist checks all volumes defined in the compose file and creates missing ones
 // Volumes are created with driver "local" if no driver is specified and external is false
-func ensureVolumesExist(compose *ComposeFile) error {
+// If w is not nil, output is streamed to the HTTP response
+func ensureVolumesExist(compose *ComposeFile, w http.ResponseWriter) error {
 	if compose.Volumes == nil {
 		return nil
 	}
@@ -1474,6 +1594,12 @@ func ensureVolumesExist(compose *ComposeFile) error {
 		// Skip external volumes as they should already exist
 		if volumeConfig.External {
 			log.Printf("Skipping external volume: %s", volumeName)
+			if w != nil {
+				fmt.Fprintf(w, "[INFO] Skipping external volume: %s\n", volumeName)
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+			}
 			continue
 		}
 
@@ -1481,6 +1607,12 @@ func ensureVolumesExist(compose *ComposeFile) error {
 		checkCmd := exec.Command("docker", "volume", "inspect", volumeName)
 		if err := checkCmd.Run(); err == nil {
 			log.Printf("Volume already exists: %s", volumeName)
+			if w != nil {
+				fmt.Fprintf(w, "[INFO] Volume already exists: %s\n", volumeName)
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+			}
 			continue
 		}
 
@@ -1509,10 +1641,26 @@ func ensureVolumesExist(compose *ComposeFile) error {
 		createArgs = append(createArgs, targetName)
 
 		createCmd := exec.Command("docker", createArgs...)
-		output, err := createCmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to create volume %s: %v, output: %s", targetName, err, string(output))
+
+		// Stream output if ResponseWriter is provided
+		if w != nil {
+			log.Printf("Creating volume: %s with driver: %s", targetName, driver)
+			fmt.Fprintf(w, "[INFO] Creating volume: %s with driver: %s\n", targetName, driver)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+
+			if err := streamCommandOutput(w, createCmd); err != nil {
+				return fmt.Errorf("failed to create volume %s: %v", targetName, err)
+			}
+		} else {
+			// Fall back to non-streaming for backward compatibility
+			output, err := createCmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to create volume %s: %v, output: %s", targetName, err, string(output))
+			}
 		}
+
 		log.Printf("Successfully created volume: %s with driver: %s", targetName, driver)
 	}
 
@@ -2747,16 +2895,19 @@ func HandleDeleteStack(w http.ResponseWriter, r *http.Request) {
 	// Execute docker compose down command to remove all containers using piped YAML
 	cmd := exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down")
 	cmd.Stdin = strings.NewReader(yamlContent)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("Error deleting stack %s: %v, output: %s", stackName, err, string(output))
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("Failed to delete stack: %v", err),
-			"output":  string(output),
-		})
+
+	log.Printf("Executing docker compose down for stack: %s", stackName)
+
+	// Set up streaming headers
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Transfer-Encoding", "chunked")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+
+	// Stream the output using chunked encoding
+	if err := streamCommandOutput(w, cmd); err != nil {
+		log.Printf("Error deleting stack %s: %v", stackName, err)
+		// Error already written to response stream
 		return
 	}
 
@@ -2769,25 +2920,25 @@ func HandleDeleteStack(w http.ResponseWriter, r *http.Request) {
 	if err := os.Remove(originalFilePath); err != nil {
 		// Log warning but don't fail the operation since containers are already removed
 		log.Printf("Warning: Failed to delete original stack file %s: %v", originalFilePath, err)
+		fmt.Fprintf(w, "[WARN] Failed to delete original stack file: %v\n", err)
 	} else {
 		log.Printf("Deleted original stack file: %s", originalFilePath)
+		fmt.Fprintf(w, "[INFO] Deleted original stack file: %s\n", originalFilePath)
 	}
 
 	if err := os.Remove(effectiveFilePath); err != nil {
 		// Log warning but don't fail the operation
 		log.Printf("Warning: Failed to delete effective stack file %s: %v", effectiveFilePath, err)
+		fmt.Fprintf(w, "[WARN] Failed to delete effective stack file: %v\n", err)
 	} else {
 		log.Printf("Deleted effective stack file: %s", effectiveFilePath)
+		fmt.Fprintf(w, "[INFO] Deleted effective stack file: %s\n", effectiveFilePath)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":   true,
-		"stackName": stackName,
-		"message":   "Stack deleted successfully",
-		"output":    string(output),
-	})
+	fmt.Fprintf(w, "[DONE] Stack %s deleted successfully\n", stackName)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 // getStacksData returns the combined stacks data (same as GET /api/stacks)
