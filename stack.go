@@ -1858,11 +1858,13 @@ func enrichServices(compose *ComposeFile) {
 					labelsMap[key] = value
 				}
 			}
-		} else {
-			// Existing logic: Detect if service uses HTTPS ports (443 or 8443)
+		} else if hasTraefikLabels {
+			// Only auto-add Traefik configuration if the service already has Traefik labels
+			// Detect if service uses HTTPS ports (443 or 8443)
 			httpsOnlyPorts := []string{"443", "8443"}
+			httpPorts := []string{"80", "8080", "3000", "4200", "5000", "8000", "8081", "8888", "9000"}
 			isHTTPS := false
-			detectedPort := "80"
+			detectedPort := ""
 
 			// Check in port declarations
 			for _, portMapping := range service.Ports {
@@ -1881,31 +1883,42 @@ func enrichServices(compose *ComposeFile) {
 						break
 					}
 				}
+				// Check if it's a common HTTP port
+				if detectedPort == "" {
+					for _, httpPort := range httpPorts {
+						if containerPort == httpPort {
+							detectedPort = containerPort
+							break
+						}
+					}
+				}
 				if isHTTPS {
 					break
 				}
 			}
 
-			// Add Traefik labels if not already present
-			scheme := "http"
-			if isHTTPS {
-				scheme = "https"
-			}
+			// Only add full Traefik configuration if we detected an HTTP/HTTPS port
+			if detectedPort != "" {
+				// Add Traefik labels if not already present
+				scheme := "http"
+				if isHTTPS {
+					scheme = "https"
+				}
 
-			traefikLabels := map[string]string{
-				"traefik.enable": "true",
-				"traefik.http.routers." + serviceName + ".entrypoints":                 "https",
-				"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${HOMELAB_DOMAIN_NAME}`) || Host(`%s.leochl.ddns.net`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
-				"traefik.http.routers." + serviceName + ".service":                     serviceName,
-				"traefik.http.routers." + serviceName + ".tls":                         "true",
-				"traefik.http.services." + serviceName + ".loadbalancer.server.port":   detectedPort,
-				"traefik.http.services." + serviceName + ".loadbalancer.server.scheme": scheme,
-			}
+				traefikLabels := map[string]string{
+					"traefik.http.routers." + serviceName + ".entrypoints":                 "https",
+					"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${HOMELAB_DOMAIN_NAME}`) || Host(`%s.leochl.ddns.net`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
+					"traefik.http.routers." + serviceName + ".service":                     serviceName,
+					"traefik.http.routers." + serviceName + ".tls":                         "true",
+					"traefik.http.services." + serviceName + ".loadbalancer.server.port":   detectedPort,
+					"traefik.http.services." + serviceName + ".loadbalancer.server.scheme": scheme,
+				}
 
-			// Only add labels that don't already exist
-			for key, value := range traefikLabels {
-				if _, exists := labelsMap[key]; !exists {
-					labelsMap[key] = value
+				// Only add labels that don't already exist
+				for key, value := range traefikLabels {
+					if _, exists := labelsMap[key]; !exists {
+						labelsMap[key] = value
+					}
 				}
 			}
 		}
