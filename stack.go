@@ -664,6 +664,13 @@ func sanitizeEnvironmentVariable(envStr string) string {
 		return envStr
 	}
 
+	value := parts[1]
+
+	// Do not replace if the value starts with /run/secrets (Docker secrets path)
+	if strings.HasPrefix(value, "/run/secrets") {
+		return envStr
+	}
+
 	// Normalize the key to the ENV_KEY format
 	// Replace multiple consecutive non-alphanumeric characters with a single underscore
 	normalizedKey := normalizeEnvKey(key)
