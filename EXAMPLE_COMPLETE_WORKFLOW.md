@@ -151,7 +151,7 @@ services:
     labels:
       - traefik.enable=true
       - traefik.http.routers.backend.entrypoints=https
-      - traefik.http.routers.backend.rule=Host(`backend.localhost`) || Host(`backend.${HOMELAB_DOMAIN_NAME}`) || Host(`backend.leochl.ddns.net`) || Host(`backend`)
+      - traefik.http.routers.backend.rule=Host(`backend.localhost`) || Host(`backend.${PUBLIC_DOMAIN_NAME}`) || Host(`backend.leochl.ddns.net`) || Host(`backend`)
       - traefik.http.routers.backend.service=backend
       - traefik.http.routers.backend.tls=true
       - traefik.http.services.backend.loadbalancer.server.port=8080

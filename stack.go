@@ -1200,7 +1200,7 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 		if usesHTTPPort {
 			serviceLabels["traefik.enable"] = "true"
 			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.entrypoints", serviceName)] = "https"
-			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.rule", serviceName)] = fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${HOMELAB_DOMAIN_NAME}`) || Host(`%s`)", serviceName, serviceName, serviceName)
+			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.rule", serviceName)] = fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${PUBLIC_DOMAIN_NAME}`) || Host(`%s`)", serviceName, serviceName, serviceName)
 			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.service", serviceName)] = serviceName
 			serviceLabels[fmt.Sprintf("traefik.http.routers.%s.tls", serviceName)] = "true"
 			if detectedPort != "" {
@@ -2155,7 +2155,7 @@ func enrichServices(compose *ComposeFile) {
 			// Add standard Traefik labels if not present
 			traefikLabels := map[string]string{
 				"traefik.http.routers." + serviceName + ".entrypoints":                 "https",
-				"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${HOMELAB_DOMAIN_NAME}`) || Host(`%s.leochl.ddns.net`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
+				"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${PUBLIC_DOMAIN_NAME}`) || Host(`%s.leochl.ddns.net`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
 				"traefik.http.routers." + serviceName + ".service":                     serviceName,
 				"traefik.http.routers." + serviceName + ".tls":                         "true",
 				"traefik.http.services." + serviceName + ".loadbalancer.server.port":   customPort,
@@ -2217,7 +2217,7 @@ func enrichServices(compose *ComposeFile) {
 
 				traefikLabels := map[string]string{
 					"traefik.http.routers." + serviceName + ".entrypoints":                 "https",
-					"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${HOMELAB_DOMAIN_NAME}`) || Host(`%s.leochl.ddns.net`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
+					"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${PUBLIC_DOMAIN_NAME}`) || Host(`%s.leochl.ddns.net`) || Host(`%s`)", serviceName, serviceName, serviceName, serviceName),
 					"traefik.http.routers." + serviceName + ".service":                     serviceName,
 					"traefik.http.routers." + serviceName + ".tls":                         "true",
 					"traefik.http.services." + serviceName + ".loadbalancer.server.port":   detectedPort,
