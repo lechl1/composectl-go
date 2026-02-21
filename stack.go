@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,6 +24,7 @@ type ComposeFile struct {
 	Volumes  map[string]ComposeVolume  `yaml:"volumes,omitempty"`
 	Networks map[string]ComposeNetwork `yaml:"networks,omitempty"`
 	Configs  map[string]ComposeConfig  `yaml:"configs,omitempty"`
+	Secrets  map[string]ComposeSecret  `yaml:"secrets,omitempty"`
 }
 
 // ComposeVolume represents a volume configuration
@@ -40,6 +44,14 @@ type ComposeNetwork struct {
 type ComposeConfig struct {
 	Content string `yaml:"content,omitempty"`
 	File    string `yaml:"file,omitempty"`
+}
+
+// ComposeSecret represents a secret configuration
+type ComposeSecret struct {
+	Name        string `yaml:"name,omitempty"`
+	Environment string `yaml:"environment,omitempty"`
+	File        string `yaml:"file,omitempty"`
+	External    bool   `yaml:"external,omitempty"`
 }
 
 // ComposeServiceConfig represents a config mount in a service
@@ -63,6 +75,7 @@ type ComposeService struct {
 	Configs       []ComposeServiceConfig `yaml:"configs,omitempty"`
 	CapAdd        []string               `yaml:"cap_add,omitempty"`
 	Sysctls       interface{}            `yaml:"sysctls,omitempty"` // Can be array or map
+	Secrets       []string               `yaml:"secrets,omitempty"`
 }
 
 // handleStackAPI routes stack API requests to appropriate handlers
@@ -561,6 +574,7 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 		Volumes:  make(map[string]ComposeVolume),
 		Networks: make(map[string]ComposeNetwork),
 		Configs:  make(map[string]ComposeConfig),
+		Secrets:  make(map[string]ComposeSecret),
 	}
 
 	for _, containerData := range inspectData {
@@ -794,6 +808,9 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 
 		compose.Services[serviceName] = service
 	}
+
+	// Process secrets to ensure proper declaration
+	processSecrets(&compose)
 
 	// Marshal to YAML with 2-space indentation
 	var buf strings.Builder
@@ -1243,12 +1260,230 @@ func getLowestPrivilegedPort(service ComposeService, labelsMap map[string]string
 	return lowestPort
 }
 
+// processSecrets scans environment variables for /run/secrets/ references
+// and ensures the corresponding secrets are declared at both service and top level
+func processSecrets(compose *ComposeFile) {
+	// Track all secrets that need to be declared at top level
+	requiredSecrets := make(map[string]bool)
+
+	// Process each service
+	for serviceName, service := range compose.Services {
+		// Track secrets needed by this service
+		serviceSecrets := make(map[string]bool)
+
+		// Scan environment variables for /run/secrets/ references
+		for _, envVar := range service.Environment {
+			// Parse the environment variable
+			parts := strings.SplitN(envVar, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+
+			value := parts[1]
+
+			// Check if the value matches /run/secrets/XXXX pattern
+			if strings.HasPrefix(value, "/run/secrets/") {
+				secretName := strings.TrimPrefix(value, "/run/secrets/")
+				if secretName != "" {
+					serviceSecrets[secretName] = true
+					requiredSecrets[secretName] = true
+				}
+			}
+		}
+
+		// Add secrets to service if needed
+		if len(serviceSecrets) > 0 {
+			// Get existing service secrets
+			existingSecrets := make(map[string]bool)
+			for _, secret := range service.Secrets {
+				existingSecrets[secret] = true
+			}
+
+			// Add missing secrets to service
+			for secretName := range serviceSecrets {
+				if !existingSecrets[secretName] {
+					service.Secrets = append(service.Secrets, secretName)
+					log.Printf("Auto-added secret '%s' to service '%s'", secretName, serviceName)
+				}
+			}
+
+			// Update the service in the compose file
+			compose.Services[serviceName] = service
+		}
+	}
+
+	// Initialize top-level secrets map if needed
+	if compose.Secrets == nil {
+		compose.Secrets = make(map[string]ComposeSecret)
+	}
+
+	// Add missing secrets at top level
+	for secretName := range requiredSecrets {
+		if _, exists := compose.Secrets[secretName]; !exists {
+			compose.Secrets[secretName] = ComposeSecret{
+				Name:        secretName,
+				Environment: secretName,
+			}
+			log.Printf("Auto-added top-level secret declaration for '%s'", secretName)
+		}
+	}
+
+	// Ensure all secrets exist in prod.env file
+	if len(requiredSecrets) > 0 {
+		secretNames := make([]string, 0, len(requiredSecrets))
+		for secretName := range requiredSecrets {
+			secretNames = append(secretNames, secretName)
+		}
+		if err := ensureSecretsInProdEnv(secretNames); err != nil {
+			log.Printf("Warning: Failed to ensure secrets in prod.env: %v", err)
+		}
+	}
+}
+
+// generateRandomPassword generates a secure random password using safe characters
+// Characters: A-Z, a-z, 0-9, ._+-
+// Length: 24 characters
+func generateRandomPassword(length int) (string, error) {
+	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._+-"
+	password := make([]byte, length)
+
+	for i := range password {
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			return "", fmt.Errorf("failed to generate random number: %w", err)
+		}
+		password[i] = charset[num.Int64()]
+	}
+
+	return string(password), nil
+}
+
+// readProdEnv reads the prod.env file and returns a map of environment variables
+func readProdEnv(filePath string) (map[string]string, error) {
+	envVars := make(map[string]string)
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// File doesn't exist, return empty map
+			return envVars, nil
+		}
+		return nil, fmt.Errorf("failed to open prod.env: %w", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Parse KEY=VALUE
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			envVars[key] = value
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read prod.env: %w", err)
+	}
+
+	return envVars, nil
+}
+
+// writeProdEnv writes environment variables to the prod.env file
+func writeProdEnv(filePath string, envVars map[string]string) error {
+	// Create a sorted list of keys for consistent output
+	keys := make([]string, 0, len(envVars))
+	for key := range envVars {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	// Create or truncate the file
+	file, err := os.Create(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to create prod.env: %w", err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+
+	// Write header comment
+	fmt.Fprintln(writer, "# Auto-generated secrets for Docker Compose")
+	fmt.Fprintln(writer, "# This file is managed automatically by composectl")
+	fmt.Fprintln(writer, "# Do not edit manually unless you know what you are doing")
+	fmt.Fprintln(writer, "")
+
+	// Write all environment variables
+	for _, key := range keys {
+		fmt.Fprintf(writer, "%s=%s\n", key, envVars[key])
+	}
+
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("failed to write prod.env: %w", err)
+	}
+
+	return nil
+}
+
+// ensureSecretsInProdEnv ensures all required secrets exist in prod.env file
+// Creates missing secrets with randomly generated passwords
+func ensureSecretsInProdEnv(secretNames []string) error {
+	const prodEnvPath = "prod.env"
+	const passwordLength = 24
+
+	// Read existing prod.env
+	envVars, err := readProdEnv(prodEnvPath)
+	if err != nil {
+		return err
+	}
+
+	modified := false
+
+	// Check each secret
+	for _, secretName := range secretNames {
+		if _, exists := envVars[secretName]; !exists {
+			// Generate a new password
+			password, err := generateRandomPassword(passwordLength)
+			if err != nil {
+				return fmt.Errorf("failed to generate password for %s: %w", secretName, err)
+			}
+
+			envVars[secretName] = password
+			modified = true
+			log.Printf("Generated new secret '%s' in prod.env", secretName)
+		} else {
+			log.Printf("Secret '%s' already exists in prod.env", secretName)
+		}
+	}
+
+	// Write back to file if modified
+	if modified {
+		if err := writeProdEnv(prodEnvPath, envVars); err != nil {
+			return err
+		}
+		log.Printf("Updated prod.env with %d new secret(s)", len(secretNames))
+	}
+
+	return nil
+}
+
 func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
 	// Parse the YAML
 	var compose ComposeFile
 	if err := yaml.Unmarshal(yamlContent, &compose); err != nil {
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
+
+	// Process secrets first
+	processSecrets(&compose)
 
 	// Enrich each service with Traefik labels
 	for serviceName, service := range compose.Services {

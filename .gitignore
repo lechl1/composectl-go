@@ -5,3 +5,4 @@ composectl
 stacks
 thumbnails
 *.log
+prod.env
