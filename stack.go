@@ -1103,6 +1103,116 @@ func addUndeclaredNetworksAndVolumes(compose *ComposeFile) {
 }
 
 // enrichComposeWithTraefikLabels parses a docker-compose YAML and enriches services with Traefik labels
+// extractPortNumber extracts the port number from various port formats
+// Supports: "80", "0.0.0.0:80", "127.0.0.1:80:80", "80/tcp", "0.0.0.0:80/tcp", etc.
+func extractPortNumber(portStr string) int {
+	// Remove protocol suffix if present (/tcp, /udp)
+	portStr = strings.Split(portStr, "/")[0]
+
+	// Split by colon to handle bind addresses
+	parts := strings.Split(portStr, ":")
+
+	// The port is always the last part (or only part if no bind address)
+	portPart := parts[len(parts)-1]
+
+	// Try to parse as integer
+	var port int
+	fmt.Sscanf(portPart, "%d", &port)
+	return port
+}
+
+// getLowestPrivilegedPort checks if any port below 1024 is used in the service
+// and returns the lowest privileged port found, or 0 if none found
+// Checks ports, environment variables, labels, and config content
+func getLowestPrivilegedPort(service ComposeService, labelsMap map[string]string, configs map[string]ComposeConfig) int {
+	lowestPort := 0
+
+	// Check port declarations
+	for _, portMapping := range service.Ports {
+		// Check both host port and container port
+		parts := strings.Split(portMapping, ":")
+		for _, part := range parts {
+			port := extractPortNumber(part)
+			if port > 0 && port < 1024 {
+				if lowestPort == 0 || port < lowestPort {
+					lowestPort = port
+				}
+			}
+		}
+	}
+
+	// Check environment variables for port values
+	for _, env := range service.Environment {
+		// Look for PORT=xxx or similar patterns
+		if strings.Contains(strings.ToUpper(env), "PORT") {
+			parts := strings.SplitN(env, "=", 2)
+			if len(parts) == 2 {
+				port := extractPortNumber(parts[1])
+				if port > 0 && port < 1024 {
+					if lowestPort == 0 || port < lowestPort {
+						lowestPort = port
+					}
+				}
+			}
+		}
+	}
+
+	// Check labels for port values (including Traefik labels)
+	for key, value := range labelsMap {
+		if strings.Contains(strings.ToLower(key), "port") {
+			port := extractPortNumber(value)
+			if port > 0 && port < 1024 {
+				if lowestPort == 0 || port < lowestPort {
+					lowestPort = port
+				}
+			}
+		}
+	}
+
+	// Check config content for port declarations
+	for _, configRef := range service.Configs {
+		if configDef, exists := configs[configRef.Source]; exists {
+			if configDef.Content != "" {
+				// Parse config content looking for port values
+				// Support JSON format: "port": 80 or "port":80
+				// Support YAML format: port: 80
+				// Support various port-related keys
+				portKeys := []string{"port", "PORT", "Port", "listen_port", "bind_port", "server_port", "http_port", "https_port"}
+
+				for _, key := range portKeys {
+					// Simple pattern matching without regex for performance
+					configLines := strings.Split(configDef.Content, "\n")
+					for _, line := range configLines {
+						// Look for "key": value or key: value
+						if strings.Contains(line, key) && strings.Contains(line, ":") {
+							// Extract the value after the colon
+							parts := strings.Split(line, ":")
+							if len(parts) >= 2 {
+								// Get the part after the key
+								for i, part := range parts {
+									if strings.Contains(part, key) && i+1 < len(parts) {
+										valuePart := strings.TrimSpace(parts[i+1])
+										// Remove trailing comma, quotes, etc.
+										valuePart = strings.Trim(valuePart, ` ,}"'`)
+										port := extractPortNumber(valuePart)
+										if port > 0 && port < 1024 {
+											if lowestPort == 0 || port < lowestPort {
+												lowestPort = port
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return lowestPort
+}
+
 func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
 	// Parse the YAML
 	var compose ComposeFile
@@ -1256,6 +1366,64 @@ func enrichComposeWithTraefikLabels(yamlContent []byte) ([]byte, error) {
 		sort.Strings(labelsArray)
 
 		service.Labels = labelsArray
+
+		// Check for privileged ports and add necessary capabilities
+		lowestPrivilegedPort := getLowestPrivilegedPort(service, labelsMap, compose.Configs)
+		if lowestPrivilegedPort > 0 {
+			// Add NET_BIND_SERVICE capability if not already present
+			hasCapAdd := false
+			for _, capability := range service.CapAdd {
+				if capability == "NET_BIND_SERVICE" {
+					hasCapAdd = true
+					break
+				}
+			}
+
+			if !hasCapAdd {
+				service.CapAdd = append(service.CapAdd, "NET_BIND_SERVICE")
+				log.Printf("Auto-added NET_BIND_SERVICE capability for service %s due to privileged port %d detection", serviceName, lowestPrivilegedPort)
+			}
+
+			// Add sysctls for unprivileged port start
+			sysctlsMap := make(map[string]string)
+
+			// Parse existing sysctls if present
+			if service.Sysctls != nil {
+				switch v := service.Sysctls.(type) {
+				case []interface{}:
+					// Sysctls as array of strings
+					for _, sysctl := range v {
+						if sysctlStr, ok := sysctl.(string); ok {
+							if parts := strings.SplitN(sysctlStr, "=", 2); len(parts) == 2 {
+								sysctlsMap[parts[0]] = parts[1]
+							}
+						}
+					}
+				case map[string]interface{}:
+					// Sysctls as map
+					for k, val := range v {
+						if valStr, ok := val.(string); ok {
+							sysctlsMap[k] = valStr
+						}
+					}
+				}
+			}
+
+			// Add required sysctls if not present
+			if _, exists := sysctlsMap["net.ipv4.ip_unprivileged_port_start"]; !exists {
+				sysctlsMap["net.ipv4.ip_unprivileged_port_start"] = fmt.Sprintf("%d", lowestPrivilegedPort)
+				log.Printf("Auto-added net.ipv4.ip_unprivileged_port_start=%d sysctl for service %s", lowestPrivilegedPort, serviceName)
+			}
+
+			// Convert sysctls to array format
+			var sysctlsArray []string
+			for key, value := range sysctlsMap {
+				sysctlsArray = append(sysctlsArray, fmt.Sprintf("%s=%s", key, value))
+			}
+			sort.Strings(sysctlsArray)
+			service.Sysctls = sysctlsArray
+		}
+
 		compose.Services[serviceName] = service
 	}
 
