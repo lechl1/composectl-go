@@ -631,6 +631,68 @@ func inspectContainers(containerIDs []string) ([]map[string]interface{}, error) 
 	return inspectData, nil
 }
 
+// sanitizeEnvironmentVariable checks if an environment variable contains sensitive information
+// and replaces its value with a variable reference in the format ${ENV_KEY}
+func sanitizeEnvironmentVariable(envStr string) string {
+	// Split the environment variable into key and value
+	parts := strings.SplitN(envStr, "=", 2)
+	if len(parts) != 2 {
+		return envStr
+	}
+
+	key := parts[0]
+
+	// Check if the key contains sensitive keywords
+	upperKey := strings.ToUpper(key)
+	sensitiveKeywords := []string{"PASSWD", "PASSWORD", "SECRET", "KEY", "TOKEN", "API_KEY", "APIKEY", "PRIVATE"}
+
+	isSensitive := false
+	for _, keyword := range sensitiveKeywords {
+		if strings.Contains(upperKey, keyword) {
+			isSensitive = true
+			break
+		}
+	}
+
+	if !isSensitive {
+		return envStr
+	}
+
+	// Normalize the key to the ENV_KEY format
+	// Replace multiple consecutive non-alphanumeric characters with a single underscore
+	normalizedKey := normalizeEnvKey(key)
+
+	// Return the environment variable with the value replaced
+	return fmt.Sprintf("%s=${%s}", key, normalizedKey)
+}
+
+// normalizeEnvKey normalizes an environment key to uppercase with underscores
+// Multiple consecutive non-alphanumeric characters are replaced with a single underscore
+func normalizeEnvKey(key string) string {
+	// Convert to uppercase
+	normalized := strings.ToUpper(key)
+
+	// Replace non-alphanumeric characters with underscores
+	var result strings.Builder
+	lastWasUnderscore := false
+
+	for _, ch := range normalized {
+		if (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') {
+			result.WriteRune(ch)
+			lastWasUnderscore = false
+		} else {
+			// Replace any non-alphanumeric character with underscore
+			if !lastWasUnderscore {
+				result.WriteRune('_')
+				lastWasUnderscore = true
+			}
+		}
+	}
+
+	// Trim leading and trailing underscores
+	return strings.Trim(result.String(), "_")
+}
+
 // reconstructComposeFromContainers creates a docker-compose YAML from container inspection data
 func reconstructComposeFromContainers(inspectData []map[string]interface{}) (string, error) {
 	compose := ComposeFile{
@@ -705,7 +767,7 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 					if !strings.HasPrefix(envStr, "PATH=") &&
 						!strings.HasPrefix(envStr, "HOSTNAME=") &&
 						!strings.HasPrefix(envStr, "HOME=") {
-						envVars = append(envVars, envStr)
+						envVars = append(envVars, sanitizeEnvironmentVariable(envStr))
 					}
 				}
 			}
