@@ -20,6 +20,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Stack represents a Docker Compose stack with its containers
+type Stack struct {
+	Name       string          `json:"name"`
+	Containers []DockerInspect `json:"containers"`
+}
+
 // handleStackAPI routes stack API requests to appropriate handlers
 func handleStackAPI(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -195,7 +201,7 @@ func setEnvironmentAsArray(service *ComposeService, envArray []string) {
 }
 
 // getStacksList returns a combined list of running stacks from Docker and available YAML files
-func getStacksList() ([]map[string]interface{}, error) {
+func getStacksList() ([]Stack, error) {
 	// Get all containers from Docker (running and stopped)
 	allContainers, err := getAllContainers()
 	if err != nil {
@@ -230,9 +236,7 @@ func getStacksList() ([]map[string]interface{}, error) {
 	// Create a map to track which stacks are already running
 	runningStackNames := make(map[string]bool)
 	for _, stack := range runningStacks {
-		if name, ok := stack["name"].(string); ok {
-			runningStackNames[name] = true
-		}
+		runningStackNames[stack.Name] = true
 	}
 
 	// Add YAML stacks that are not running (with simulated containers)
@@ -243,14 +247,14 @@ func getStacksList() ([]map[string]interface{}, error) {
 			if err != nil {
 				log.Printf("Error creating simulated containers for %s: %v", stackName, err)
 				// Still add the stack but with empty containers
-				runningStacks = append(runningStacks, map[string]interface{}{
-					"name":       stackName,
-					"containers": []interface{}{},
+				runningStacks = append(runningStacks, Stack{
+					Name:       stackName,
+					Containers: []DockerInspect{},
 				})
 			} else {
-				runningStacks = append(runningStacks, map[string]interface{}{
-					"name":       stackName,
-					"containers": simulatedContainers,
+				runningStacks = append(runningStacks, Stack{
+					Name:       stackName,
+					Containers: simulatedContainers,
 				})
 			}
 		}
@@ -346,7 +350,8 @@ func HandleListStacks(w http.ResponseWriter, r *http.Request) {
 }
 
 // createSimulatedContainers creates simulated container objects from a docker-compose.yml file
-func createSimulatedContainers(stackName, filePath string, allContainers []map[string]interface{}) ([]map[string]interface{}, error) {
+// Uses raw docker inspect JSON format with lowercase keys
+func createSimulatedContainers(stackName, filePath string, allContainers []map[string]interface{}) ([]DockerInspect, error) {
 	// Read the YAML file
 	content, err := os.ReadFile(filePath)
 	if err != nil {
@@ -359,17 +364,38 @@ func createSimulatedContainers(stackName, filePath string, allContainers []map[s
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
-	// Create a map of containers by name for quick lookup
-	containerMap := make(map[string]map[string]interface{})
+	// Get existing container IDs for inspection
+	var existingContainerIDs []string
+	containerNameToID := make(map[string]string)
 	for _, container := range allContainers {
 		if names, ok := container["Names"].(string); ok {
-			// Docker ps returns names with leading slash, so we normalize
 			normalizedName := strings.TrimPrefix(names, "/")
-			containerMap[normalizedName] = container
+			if id, ok := container["ID"].(string); ok {
+				containerNameToID[normalizedName] = id
+				existingContainerIDs = append(existingContainerIDs, id)
+			}
 		}
 	}
 
-	var containers []map[string]interface{}
+	// Inspect existing containers to get full details
+	var inspectedContainers []DockerInspect
+	if len(existingContainerIDs) > 0 {
+		inspectData, err := inspectContainers(existingContainerIDs)
+		if err != nil {
+			log.Printf("Warning: failed to inspect containers: %v", err)
+		} else {
+			inspectedContainers = inspectData
+		}
+	}
+
+	// Create a map of inspected containers by name for quick lookup
+	inspectedMap := make(map[string]DockerInspect)
+	for _, inspected := range inspectedContainers {
+		normalizedName := strings.TrimPrefix(inspected.Name, "/")
+		inspectedMap[normalizedName] = inspected
+	}
+
+	var containers []DockerInspect
 
 	// Create a simulated container for each service
 	for serviceName, service := range compose.Services {
@@ -378,122 +404,301 @@ func createSimulatedContainers(stackName, filePath string, allContainers []map[s
 			containerName = serviceName
 		}
 
-		// Build labels map
-		labels := make(map[string]interface{})
-		labels["com.docker.compose.project"] = stackName
-		labels["com.docker.compose.service"] = serviceName
-		labels["com.docker.compose.oneoff"] = "False"
+		// Check if this container actually exists in Docker
+		if inspectedData, exists := inspectedMap[containerName]; exists {
+			// Use the real docker inspect data
+			containers = append(containers, inspectedData)
+		} else {
+			// Create a simulated docker inspect format container
+			// Build labels map
+			labels := make(map[string]string)
+			labels["com.docker.compose.project"] = stackName
+			labels["com.docker.compose.service"] = serviceName
+			labels["com.docker.compose.oneoff"] = "False"
 
-		// Add custom labels from the service definition
-		if service.Labels != nil {
-			switch v := service.Labels.(type) {
-			case []interface{}:
-				// Labels as array of strings
-				for _, label := range v {
-					if labelStr, ok := label.(string); ok {
-						if parts := strings.SplitN(labelStr, "=", 2); len(parts) == 2 {
-							labels[parts[0]] = parts[1]
+			// Add custom labels from the service definition
+			if service.Labels != nil {
+				switch v := service.Labels.(type) {
+				case []interface{}:
+					for _, label := range v {
+						if labelStr, ok := label.(string); ok {
+							if parts := strings.SplitN(labelStr, "=", 2); len(parts) == 2 {
+								labels[parts[0]] = parts[1]
+							}
 						}
+					}
+				case map[string]interface{}:
+					for k, val := range v {
+						labels[k] = fmt.Sprintf("%v", val)
+					}
+				}
+			}
+
+			// Build command array
+			var cmd []string
+			switch v := service.Command.(type) {
+			case string:
+				cmd = []string{v}
+			case []interface{}:
+				for _, c := range v {
+					if s, ok := c.(string); ok {
+						cmd = append(cmd, s)
+					}
+				}
+			}
+
+			// Build environment array
+			var env []string
+			switch v := service.Environment.(type) {
+			case []interface{}:
+				for _, e := range v {
+					if s, ok := e.(string); ok {
+						env = append(env, s)
 					}
 				}
 			case map[string]interface{}:
-				// Labels as map
 				for k, val := range v {
-					labels[k] = val
+					env = append(env, fmt.Sprintf("%s=%v", k, val))
 				}
 			}
-		}
 
-		// Build mounts from volumes
-		var mounts []string
-		for _, volume := range service.Volumes {
-			// Extract volume name or path
-			parts := strings.Split(volume, ":")
-			if len(parts) > 0 {
-				mounts = append(mounts, parts[0])
+			// Build mounts from volumes
+			var mounts []Mount
+			for _, volume := range service.Volumes {
+				parts := strings.Split(volume, ":")
+				mountType := "volume"
+				source := ""
+				destination := ""
+
+				if len(parts) >= 2 {
+					source = parts[0]
+					destination = parts[1]
+					// If source starts with / or ./, it's a bind mount
+					if strings.HasPrefix(source, "/") || strings.HasPrefix(source, "./") {
+						mountType = "bind"
+					}
+				}
+
+				mounts = append(mounts, Mount{
+					Type:        mountType,
+					Source:      source,
+					Destination: destination,
+					Mode:        "",
+					RW:          true,
+					Propagation: "rprivate",
+				})
 			}
-		}
-		mountsStr := strings.Join(mounts, ",")
 
-		// Build ports string
-		portsStr := strings.Join(service.Ports, ", ")
-
-		// Build networks array/string
-		var networksStr string
-		switch v := service.Networks.(type) {
-		case []interface{}:
-			var nets []string
-			for _, net := range v {
-				if netStr, ok := net.(string); ok {
-					nets = append(nets, netStr)
+			// Build networks
+			networks := make(map[string]EndpointSettings)
+			switch v := service.Networks.(type) {
+			case []interface{}:
+				for _, net := range v {
+					if netStr, ok := net.(string); ok {
+						networks[netStr] = EndpointSettings{}
+					}
+				}
+			case map[string]interface{}:
+				for net := range v {
+					networks[net] = EndpointSettings{}
 				}
 			}
-			networksStr = strings.Join(nets, ",")
-		case map[string]interface{}:
-			var nets []string
-			for net := range v {
-				nets = append(nets, net)
-			}
-			networksStr = strings.Join(nets, ",")
-		}
 
-		// Build command string
-		var commandStr string
-		switch v := service.Command.(type) {
-		case string:
-			commandStr = fmt.Sprintf("\"%s\"", v)
-		case []interface{}:
-			var cmdParts []string
-			for _, part := range v {
-				if partStr, ok := part.(string); ok {
-					cmdParts = append(cmdParts, partStr)
+			// Build exposed ports and port bindings
+			exposedPorts := make(map[string]interface{})
+			portBindings := make(map[string][]PortBinding)
+			for _, portStr := range service.Ports {
+				// Parse port format: "host:container" or "container"
+				parts := strings.Split(portStr, ":")
+				containerPort := ""
+				hostPort := ""
+
+				if len(parts) == 2 {
+					hostPort = parts[0]
+					containerPort = parts[1]
+				} else if len(parts) == 1 {
+					containerPort = parts[0]
+				}
+
+				// Add protocol if not present
+				if !strings.Contains(containerPort, "/") {
+					containerPort = containerPort + "/tcp"
+				}
+
+				exposedPorts[containerPort] = struct{}{}
+
+				if hostPort != "" {
+					portBindings[containerPort] = []PortBinding{
+						{
+							HostIP:   "0.0.0.0",
+							HostPort: hostPort,
+						},
+					}
 				}
 			}
-			commandStr = fmt.Sprintf("\"%s\"", strings.Join(cmdParts, " "))
-		}
 
-		// Default state and status
-		state := "created"
-		status := "Created"
-
-		// Check if this container actually exists in Docker
-		if existingContainer, exists := containerMap[containerName]; exists {
-			// Use the real State and Status from the existing container
-			if s, ok := existingContainer["State"].(string); ok {
-				state = s
+			// Create simulated docker inspect format
+			container := DockerInspect{
+				ID:      "",
+				Created: "",
+				Path:    "",
+				Args:    []string{},
+				State: ContainerState{
+					Status:     "created",
+					Running:    false,
+					Paused:     false,
+					Restarting: false,
+					OOMKilled:  false,
+					Dead:       false,
+					Pid:        0,
+					ExitCode:   0,
+					Error:      "",
+					StartedAt:  "",
+					FinishedAt: "",
+				},
+				Image:           service.Image,
+				ResolvConfPath:  "",
+				HostnamePath:    "",
+				HostsPath:       "",
+				LogPath:         "",
+				Name:            "/" + containerName,
+				RestartCount:    0,
+				Driver:          "overlay2",
+				Platform:        "linux",
+				MountLabel:      "",
+				ProcessLabel:    "",
+				AppArmorProfile: "",
+				ExecIDs:         nil,
+				HostConfig: HostConfig{
+					Binds:           service.Volumes,
+					ContainerIDFile: "",
+					LogConfig: LogConfig{
+						Type:   "json-file",
+						Config: map[string]string{},
+					},
+					NetworkMode:  "default",
+					PortBindings: portBindings,
+					RestartPolicy: RestartPolicy{
+						Name:              "no",
+						MaximumRetryCount: 0,
+					},
+					AutoRemove:           false,
+					VolumeDriver:         "",
+					VolumesFrom:          nil,
+					CapabilityAdd:        nil,
+					CapabilityDrop:       nil,
+					DNS:                  []string{},
+					DNSOptions:           []string{},
+					DNSSearch:            []string{},
+					ExtraHosts:           nil,
+					GroupAdd:             nil,
+					IpcMode:              "private",
+					Cgroup:               "",
+					Links:                nil,
+					OomScoreAdj:          0,
+					PidMode:              "",
+					Privileged:           false,
+					PublishAllPorts:      false,
+					ReadonlyRootfs:       false,
+					SecurityOpt:          nil,
+					UTSMode:              "",
+					UsernsMode:           "",
+					ShmSize:              67108864,
+					Runtime:              "runc",
+					ConsoleSize:          []int{0, 0},
+					Isolation:            "",
+					CPUShares:            0,
+					Memory:               0,
+					NanoCPUs:             0,
+					CgroupParent:         "",
+					BlkioWeight:          0,
+					BlkioWeightDevice:    nil,
+					BlkioDeviceReadBps:   nil,
+					BlkioDeviceWriteBps:  nil,
+					BlkioDeviceReadIOps:  nil,
+					BlkioDeviceWriteIOps: nil,
+					CPUPeriod:            0,
+					CPUQuota:             0,
+					CPURealtimePeriod:    0,
+					CPURealtimeRuntime:   0,
+					CpusetCpus:           "",
+					CpusetMems:           "",
+					Devices:              nil,
+					DeviceCgroupRules:    nil,
+					DiskQuota:            0,
+					KernelMemory:         0,
+					MemoryReservation:    0,
+					MemorySwap:           0,
+					MemorySwappiness:     nil,
+					OomKillDisable:       nil,
+					PidsLimit:            nil,
+					Ulimits:              nil,
+					CPUCount:             0,
+					CPUPercent:           0,
+					IOMaximumIOps:        0,
+					IOMaximumBandwidth:   0,
+				},
+				GraphDriver: GraphDriver{
+					Name: "overlay2",
+					Data: map[string]string{
+						"lowerdir":  "",
+						"mergeddir": "",
+						"upperdir":  "",
+						"workdir":   "",
+					},
+				},
+				Mounts: mounts,
+				Config: ContainerConfig{
+					Hostname:     containerName,
+					Domainname:   "",
+					User:         "",
+					AttachStdin:  false,
+					AttachStdout: false,
+					AttachStderr: false,
+					ExposedPorts: exposedPorts,
+					Tty:          false,
+					OpenStdin:    false,
+					StdinOnce:    false,
+					Env:          env,
+					Cmd:          cmd,
+					Image:        service.Image,
+					Volumes:      nil,
+					WorkingDir:   "",
+					Entrypoint:   nil,
+					OnBuild:      nil,
+					Labels:       labels,
+				},
+				NetworkSettings: NetworkSettings{
+					Bridge:                 "",
+					SandboxID:              "",
+					HairpinMode:            false,
+					LinkLocalIPv6Address:   "",
+					LinkLocalIPv6PrefixLen: 0,
+					Ports:                  portBindings,
+					SandboxKey:             "",
+					SecondaryIPAddresses:   nil,
+					SecondaryIPv6Addresses: nil,
+					EndpointID:             "",
+					Gateway:                "",
+					GlobalIPv6Address:      "",
+					GlobalIPv6PrefixLen:    0,
+					IPAddress:              "",
+					IPPrefixLen:            0,
+					IPv6Gateway:            "",
+					MacAddress:             "",
+					Networks:               networks,
+				},
 			}
-			if s, ok := existingContainer["Status"].(string); ok {
-				status = s
-			}
-		}
 
-		// Create the container object
-		container := map[string]interface{}{
-			"Names":        containerName,
-			"Image":        service.Image,
-			"Command":      commandStr,
-			"State":        state,
-			"Status":       status,
-			"ID":           "",
-			"CreatedAt":    "",
-			"RunningFor":   "",
-			"Size":         "0B",
-			"LocalVolumes": fmt.Sprintf("%d", len(service.Volumes)),
-			"Platform":     nil,
-			"Networks":     networksStr,
-			"Ports":        portsStr,
-			"Mounts":       mountsStr,
-			"Labels":       labels,
+			containers = append(containers, container)
 		}
-
-		containers = append(containers, container)
 	}
 
 	return containers, nil
 }
 
 // getRunningStacks executes docker ps and returns stacks grouped by compose project
-func getRunningStacks() ([]map[string]interface{}, error) {
+func getRunningStacks() ([]Stack, error) {
 	// Execute docker ps command
 	cmd := exec.Command("docker", "ps", "-a", "--no-trunc", "--format", "json")
 	output, err := cmd.Output()
@@ -534,7 +739,7 @@ func getRunningStacks() ([]map[string]interface{}, error) {
 	}
 
 	// Group containers by com.docker.compose.project label
-	stacksMap := make(map[string][]map[string]interface{})
+	stacksMap := make(map[string][]string) // projectName -> []containerIDs
 
 	for _, container := range containers {
 		projectName := "none"
@@ -544,15 +749,29 @@ func getRunningStacks() ([]map[string]interface{}, error) {
 			}
 		}
 
-		stacksMap[projectName] = append(stacksMap[projectName], container)
+		if id, ok := container["ID"].(string); ok {
+			stacksMap[projectName] = append(stacksMap[projectName], id)
+		}
 	}
 
-	// Convert map to array of stacks
-	var stacks []map[string]interface{}
-	for name, containers := range stacksMap {
-		stacks = append(stacks, map[string]interface{}{
-			"name":       name,
-			"containers": containers,
+	// Inspect all containers and group by stack
+	var stacks []Stack
+	for projectName, containerIDs := range stacksMap {
+		// Inspect containers to get full details
+		inspectedContainers, err := inspectContainers(containerIDs)
+		if err != nil {
+			log.Printf("Warning: failed to inspect containers for stack %s: %v", projectName, err)
+			// Add stack with empty containers on error
+			stacks = append(stacks, Stack{
+				Name:       projectName,
+				Containers: []DockerInspect{},
+			})
+			continue
+		}
+
+		stacks = append(stacks, Stack{
+			Name:       projectName,
+			Containers: inspectedContainers,
 		})
 	}
 
@@ -647,9 +866,9 @@ func findContainersByProjectName(projectName string) ([]string, error) {
 }
 
 // inspectContainers runs docker inspect on the given container IDs and returns the parsed JSON
-func inspectContainers(containerIDs []string) ([]map[string]interface{}, error) {
+func inspectContainers(containerIDs []string) ([]DockerInspect, error) {
 	if len(containerIDs) == 0 {
-		return []map[string]interface{}{}, nil
+		return []DockerInspect{}, nil
 	}
 
 	args := append([]string{"inspect"}, containerIDs...)
@@ -659,7 +878,7 @@ func inspectContainers(containerIDs []string) ([]map[string]interface{}, error) 
 		return nil, fmt.Errorf("failed to inspect containers: %w", err)
 	}
 
-	var inspectData []map[string]interface{}
+	var inspectData []DockerInspect
 	if err := json.Unmarshal(output, &inspectData); err != nil {
 		return nil, fmt.Errorf("failed to parse inspect output: %w", err)
 	}
@@ -1071,7 +1290,7 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 }
 
 // reconstructComposeFromContainers creates a docker-compose YAML from container inspection data
-func reconstructComposeFromContainers(inspectData []map[string]interface{}) (string, error) {
+func reconstructComposeFromContainers(inspectData []DockerInspect) (string, error) {
 	compose := ComposeFile{
 		Services: make(map[string]ComposeService),
 		Volumes:  make(map[string]ComposeVolume),
@@ -1082,18 +1301,12 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 
 	for _, containerData := range inspectData {
 		// Extract service name from labels
-		config, ok := containerData["Config"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		labels, _ := config["Labels"].(map[string]interface{})
-		serviceName, ok := labels["com.docker.compose.service"].(string)
+		labels := containerData.Config.Labels
+		serviceName, ok := labels["com.docker.compose.service"]
 		if !ok || serviceName == "" {
 			// Fallback to container name without project prefix
-			if name, ok := containerData["Name"].(string); ok {
-				serviceName = strings.TrimPrefix(name, "/")
-			} else {
+			serviceName = strings.TrimPrefix(containerData.Name, "/")
+			if serviceName == "" {
 				continue
 			}
 		}
@@ -1101,51 +1314,34 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 		service := ComposeService{}
 
 		// Image
-		if image, ok := config["Image"].(string); ok {
-			service.Image = image
-		}
+		service.Image = containerData.Config.Image
 
 		// Container name (only set if different from service name)
-		if name, ok := containerData["Name"].(string); ok {
-			containerName := strings.TrimPrefix(name, "/")
-			if containerName != serviceName {
-				service.ContainerName = containerName
-			}
+		containerName := strings.TrimPrefix(containerData.Name, "/")
+		if containerName != serviceName {
+			service.ContainerName = containerName
 		}
 
 		// Restart policy (only set if not "unless-stopped")
-		hostConfig, _ := containerData["HostConfig"].(map[string]interface{})
-		if restartPolicy, ok := hostConfig["RestartPolicy"].(map[string]interface{}); ok {
-			if policyName, ok := restartPolicy["Name"].(string); ok && policyName != "" && policyName != "unless-stopped" {
-				service.Restart = policyName
-			}
+		if containerData.HostConfig.RestartPolicy.Name != "" && containerData.HostConfig.RestartPolicy.Name != "unless-stopped" {
+			service.Restart = containerData.HostConfig.RestartPolicy.Name
 		}
 
 		// Command
-		if cmd, ok := config["Cmd"].([]interface{}); ok && len(cmd) > 0 {
-			var cmdParts []string
-			for _, part := range cmd {
-				if str, ok := part.(string); ok {
-					cmdParts = append(cmdParts, str)
-				}
-			}
-			if len(cmdParts) > 0 {
-				service.Command = cmdParts
-			}
+		if len(containerData.Config.Cmd) > 0 {
+			service.Command = containerData.Config.Cmd
 		}
 
 		// Environment variables
-		if env, ok := config["Env"].([]interface{}); ok && len(env) > 0 {
+		if len(containerData.Config.Env) > 0 {
 			var envVars []string
-			for _, envVar := range env {
-				if envStr, ok := envVar.(string); ok {
-					// Filter out common system environment variables that Docker adds
-					// Keep only user-defined environment variables
-					if !strings.HasPrefix(envStr, "PATH=") &&
-						!strings.HasPrefix(envStr, "HOSTNAME=") &&
-						!strings.HasPrefix(envStr, "HOME=") {
-						envVars = append(envVars, sanitizeEnvironmentVariable(envStr))
-					}
+			for _, envStr := range containerData.Config.Env {
+				// Filter out common system environment variables that Docker adds
+				// Keep only user-defined environment variables
+				if !strings.HasPrefix(envStr, "PATH=") &&
+					!strings.HasPrefix(envStr, "HOSTNAME=") &&
+					!strings.HasPrefix(envStr, "HOME=") {
+					envVars = append(envVars, sanitizeEnvironmentVariable(envStr))
 				}
 			}
 			if len(envVars) > 0 {
@@ -1154,52 +1350,38 @@ func reconstructComposeFromContainers(inspectData []map[string]interface{}) (str
 		}
 
 		// Ports
-		if portBindings, ok := hostConfig["PortBindings"].(map[string]interface{}); ok {
-			for containerPort, bindings := range portBindings {
-				if bindingsList, ok := bindings.([]interface{}); ok {
-					for _, binding := range bindingsList {
-						if bindingMap, ok := binding.(map[string]interface{}); ok {
-							hostPort, _ := bindingMap["HostPort"].(string)
-							if hostPort != "" {
-								service.Ports = append(service.Ports, fmt.Sprintf("%s:%s", hostPort, containerPort))
-							}
-						}
-					}
+		for containerPort, bindings := range containerData.HostConfig.PortBindings {
+			for _, binding := range bindings {
+				hostPort := binding.HostPort
+				if hostPort != "" {
+					service.Ports = append(service.Ports, fmt.Sprintf("%s:%s", hostPort, containerPort))
 				}
 			}
 		}
 
 		// Volumes/Mounts
-		if mounts, ok := containerData["Mounts"].([]interface{}); ok {
-			for _, mount := range mounts {
-				if mountMap, ok := mount.(map[string]interface{}); ok {
-					mountType, _ := mountMap["Type"].(string)
-					source, _ := mountMap["Source"].(string)
-					destination, _ := mountMap["Destination"].(string)
+		for _, mount := range containerData.Mounts {
+			mountType := mount.Type
+			source := mount.Source
+			destination := mount.Destination
 
-					if mountType == "bind" {
-						service.Volumes = append(service.Volumes, fmt.Sprintf("%s:%s", source, destination))
-					} else if mountType == "volume" {
-						volumeName, _ := mountMap["Name"].(string)
-						if volumeName != "" {
-							service.Volumes = append(service.Volumes, fmt.Sprintf("%s:%s", volumeName, destination))
-						}
-					}
+			if mountType == "bind" {
+				service.Volumes = append(service.Volumes, fmt.Sprintf("%s:%s", source, destination))
+			} else if mountType == "volume" {
+				volumeName := mount.Name
+				if volumeName != "" {
+					service.Volumes = append(service.Volumes, fmt.Sprintf("%s:%s", volumeName, destination))
 				}
 			}
 		}
 
 		// Networks
-		if networkSettings, ok := containerData["NetworkSettings"].(map[string]interface{}); ok {
-			if networks, ok := networkSettings["Networks"].(map[string]interface{}); ok {
-				var networkNames []string
-				for networkName := range networks {
-					networkNames = append(networkNames, networkName)
-				}
-				if len(networkNames) > 0 {
-					service.Networks = networkNames
-				}
-			}
+		var networkNames []string
+		for networkName := range containerData.NetworkSettings.Networks {
+			networkNames = append(networkNames, networkName)
+		}
+		if len(networkNames) > 0 {
+			service.Networks = networkNames
 		}
 
 		// Check if standard HTTP/HTTPS ports are used before filtering labels
@@ -3007,7 +3189,7 @@ func HandleDeleteStack(w http.ResponseWriter, r *http.Request) {
 
 // getStacksData returns the combined stacks data (same as GET /api/stacks)
 // This is used to provide stacks data to Go templates
-func getStacksData() ([]map[string]interface{}, error) {
+func getStacksData() ([]Stack, error) {
 	// Get all containers from Docker (running and stopped)
 	allContainers, err := getAllContainers()
 	if err != nil {
@@ -3042,9 +3224,7 @@ func getStacksData() ([]map[string]interface{}, error) {
 	// Create a map to track which stacks are already running
 	runningStackNames := make(map[string]bool)
 	for _, stack := range runningStacks {
-		if name, ok := stack["name"].(string); ok {
-			runningStackNames[name] = true
-		}
+		runningStackNames[stack.Name] = true
 	}
 
 	// Add YAML stacks that are not running (with simulated containers)
@@ -3055,14 +3235,14 @@ func getStacksData() ([]map[string]interface{}, error) {
 			if err != nil {
 				log.Printf("Error creating simulated containers for %s: %v", stackName, err)
 				// Still add the stack but with empty containers
-				runningStacks = append(runningStacks, map[string]interface{}{
-					"name":       stackName,
-					"containers": []interface{}{},
+				runningStacks = append(runningStacks, Stack{
+					Name:       stackName,
+					Containers: []DockerInspect{},
 				})
 			} else {
-				runningStacks = append(runningStacks, map[string]interface{}{
-					"name":       stackName,
-					"containers": simulatedContainers,
+				runningStacks = append(runningStacks, Stack{
+					Name:       stackName,
+					Containers: simulatedContainers,
 				})
 			}
 		}
@@ -3070,9 +3250,7 @@ func getStacksData() ([]map[string]interface{}, error) {
 
 	// Sort stacks alphabetically by name
 	sort.Slice(runningStacks, func(i, j int) bool {
-		nameI, _ := runningStacks[i]["name"].(string)
-		nameJ, _ := runningStacks[j]["name"].(string)
-		return nameI < nameJ
+		return runningStacks[i].Name < runningStacks[j].Name
 	})
 
 	return runningStacks, nil
