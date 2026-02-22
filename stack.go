@@ -2237,6 +2237,69 @@ func generateRandomPassword(length int) (string, error) {
 
 // readProdEnv reads the prod.env file and returns a map of environment variables
 func readProdEnv(filePath string) (map[string]string, error) {
+	return readProdEnvWithSecrets(filePath, "/run/secrets")
+}
+
+// readProdEnvWithSecrets reads environment variables from both prod.env and /run/secrets directory
+// It performs case-insensitive matching and validates that duplicate keys have the same value
+func readProdEnvWithSecrets(prodEnvPath string, secretsDir string) (map[string]string, error) {
+	envVars := make(map[string]string)
+	// Track original case keys for case-insensitive comparison
+	caseMap := make(map[string]string) // lowercase -> original case
+
+	// Read prod.env file
+	prodEnvVars, err := readEnvFile(prodEnvPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add prod.env variables to the result (case-insensitive)
+	for key, value := range prodEnvVars {
+		lowerKey := strings.ToLower(key)
+		if existing, found := caseMap[lowerKey]; found {
+			// Should not happen within the same file, but handle it
+			if envVars[existing] != value {
+				log.Panicf("Duplicate key with different values in prod.env: '%s' and '%s'", existing, key)
+			}
+			log.Printf("Warning: Duplicate key in prod.env (case variation): '%s' and '%s' with same value", existing, key)
+		} else {
+			envVars[key] = value
+			caseMap[lowerKey] = key
+		}
+	}
+
+	// Read /run/secrets directory
+	secretsVars, secretsErr := readSecretsDir(secretsDir)
+	if secretsErr != nil && !os.IsNotExist(secretsErr) {
+		// Not a fatal error if secrets dir doesn't exist, just log
+		log.Printf("Info: Could not read secrets directory %s: %v", secretsDir, secretsErr)
+	}
+
+	if secretsErr == nil {
+		// Merge secrets with prod.env (case-insensitive validation)
+		for secretKey, secretValue := range secretsVars {
+			lowerKey := strings.ToLower(secretKey)
+			if existing, found := caseMap[lowerKey]; found {
+				// Key exists in prod.env (possibly with different case)
+				if envVars[existing] == secretValue {
+					log.Printf("Warning: Key '%s' exists in both prod.env (as '%s') and /run/secrets with the same value", secretKey, existing)
+				} else {
+					log.Panicf("FATAL: Key '%s' exists in both prod.env (as '%s') and /run/secrets with DIFFERENT values. prod.env='%s', secrets='%s'",
+						secretKey, existing, sanitizeForLog(envVars[existing]), sanitizeForLog(secretValue))
+				}
+			} else {
+				// New key from secrets
+				envVars[secretKey] = secretValue
+				caseMap[lowerKey] = secretKey
+			}
+		}
+	}
+
+	return envVars, nil
+}
+
+// readEnvFile reads a single .env file and returns the key-value pairs
+func readEnvFile(filePath string) (map[string]string, error) {
 	envVars := make(map[string]string)
 
 	file, err := os.Open(filePath)
@@ -2245,7 +2308,7 @@ func readProdEnv(filePath string) (map[string]string, error) {
 			// File doesn't exist, return empty map
 			return envVars, nil
 		}
-		return nil, fmt.Errorf("failed to open prod.env: %w", err)
+		return nil, fmt.Errorf("failed to open %s: %w", filePath, err)
 	}
 	defer file.Close()
 
@@ -2268,10 +2331,67 @@ func readProdEnv(filePath string) (map[string]string, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to read prod.env: %w", err)
+		return nil, fmt.Errorf("failed to read %s: %w", filePath, err)
 	}
 
 	return envVars, nil
+}
+
+// readSecretsDir reads all files from /run/secrets directory
+// Each file name becomes the key, and the file content becomes the value
+func readSecretsDir(secretsDir string) (map[string]string, error) {
+	secrets := make(map[string]string)
+
+	// Check if directory exists
+	info, err := os.Stat(secretsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Directory doesn't exist, return empty map
+			return secrets, nil
+		}
+		return nil, fmt.Errorf("failed to stat secrets directory: %w", err)
+	}
+
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", secretsDir)
+	}
+
+	// Read directory entries
+	entries, err := os.ReadDir(secretsDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read secrets directory: %w", err)
+	}
+
+	// Process each file
+	for _, entry := range entries {
+		// Skip directories and hidden files
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
+		secretPath := filepath.Join(secretsDir, entry.Name())
+		content, err := os.ReadFile(secretPath)
+		if err != nil {
+			log.Printf("Warning: Failed to read secret file %s: %v", secretPath, err)
+			continue
+		}
+
+		// Use filename as key and trimmed content as value
+		key := entry.Name()
+		value := strings.TrimSpace(string(content))
+		secrets[key] = value
+		log.Printf("Loaded secret from %s: %s", secretsDir, key)
+	}
+
+	return secrets, nil
+}
+
+// sanitizeForLog sanitizes sensitive values for logging (shows first 3 chars only)
+func sanitizeForLog(value string) string {
+	if len(value) <= 3 {
+		return "***"
+	}
+	return value[:3] + "***"
 }
 
 // writeProdEnv writes environment variables to the prod.env file
@@ -2956,7 +3076,7 @@ func enrichServices(compose *ComposeFile) {
 }
 
 // getDockerSocketPath returns the appropriate Docker socket path
-// Checks if /run/user/<UID>/docker.sock exists, otherwise returns /var/run/docker.sock
+// Checks if /run/user/<UID>/docker.sock exists, otherwise returns /run/user/1000/docker.sock
 func getDockerSocketPath() string {
 	// Get the current user's UID
 	uid := os.Getuid()
@@ -2967,8 +3087,8 @@ func getDockerSocketPath() string {
 		return userSocket
 	}
 
-	// Fallback to system socket
-	return "/var/run/docker.sock"
+	// Fallback to default rootless socket (UID 1000)
+	return "/run/user/1000/docker.sock"
 }
 
 // getCurrentUserID returns the current user's UID as a string
