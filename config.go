@@ -210,6 +210,54 @@ func GetAdminPassword(args []string) string {
 	return getConfig(args, "admin_password", "")
 }
 
+// GetSecretKey retrieves the SECRET_KEY configuration with the following priority:
+// 1. Check program arguments for -secret-key or --secret-key flag
+// 2. Check SECRET_KEY_FILE env var (Docker secrets pattern)
+// 3. Check SECRET_KEY env var
+// 4. Check prod.env file (case insensitive)
+// 5. Check default Docker secrets location (/run/secrets/SECRET_KEY - case insensitive)
+// 6. Generate and save a new random secret key to prod.env
+func GetSecretKey(args []string) string {
+	secretKey := getConfig(args, "secret_key", "")
+
+	// If no secret key found, generate one and save it to prod.env
+	if secretKey == "" {
+		var err error
+		secretKey, err = generateAndSaveSecretKey()
+		if err != nil {
+			log.Fatalf("Failed to generate secret key: %v", err)
+		}
+	}
+
+	return secretKey
+}
+
+// generateAndSaveSecretKey generates a new random secret key and saves it to prod.env
+func generateAndSaveSecretKey() (string, error) {
+	// Generate a 64-character random secret key
+	secretKey, err := generateURLSafePassword(64)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate secret key: %w", err)
+	}
+
+	// Append to prod.env
+	file, err := os.OpenFile(ProdEnvPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return "", fmt.Errorf("failed to open prod.env for appending: %w", err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	writer.WriteString(fmt.Sprintf("SECRET_KEY=%s\n", secretKey))
+
+	if err := writer.Flush(); err != nil {
+		return "", fmt.Errorf("failed to write secret key to prod.env: %w", err)
+	}
+
+	log.Printf("Generated and saved SECRET_KEY to %s", ProdEnvPath)
+	return secretKey, nil
+}
+
 // generateURLSafePassword generates a cryptographically secure URL-safe random password
 func generateURLSafePassword(length int) (string, error) {
 	// Generate random bytes (we need more bytes than the final length due to base64 encoding)

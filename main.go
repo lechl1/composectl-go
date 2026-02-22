@@ -18,10 +18,15 @@ func main() {
 	}
 	log.Printf("Authentication configured for user: %s", username)
 
+	go SessionCleanup()
 	go HandleBroadcast()
-	go WatchFiles()
+	// go WatchFiles()
 
-	// Wrap all handlers with Basic Auth middleware
+	// Public endpoint (no auth required)
+	http.HandleFunc("/api/auth/login", HandleLogin)
+	http.HandleFunc("/api/auth/logout", HandleLogout)
+
+	// Wrap all handlers with Basic Auth middleware (supports both Basic Auth and Bearer tokens)
 	http.HandleFunc("/ws", BasicAuthMiddleware(HandleWebSocket))
 	http.HandleFunc("/thumbnail/", BasicAuthMiddleware(HandleThumbnail))
 	http.HandleFunc("/api/containers/", BasicAuthMiddleware(handleContainerAPI))
@@ -34,6 +39,5 @@ func main() {
 	listenAddr := fmt.Sprintf("%s:%s", addr, port)
 
 	log.Printf("Server running on http://%s:%s", addr, port)
-	log.Println("Basic Authentication enabled - credentials from prod.env (ADMIN_USERNAME, ADMIN_PASSWORD)")
 	log.Fatal(http.ListenAndServe(listenAddr, nil))
 }
