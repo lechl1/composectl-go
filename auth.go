@@ -18,7 +18,7 @@ func BasicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		// If credentials are not set, load from prod.env
 		if adminUsername == "" || adminPassword == "" {
-			envVars, err := readProdEnv("prod.env")
+			envVars, err := readProdEnv(ProdEnvPath)
 			if err != nil {
 				log.Printf("Warning: Failed to read prod.env for authentication: %v", err)
 			} else {

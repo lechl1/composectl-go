@@ -8,7 +8,8 @@ SERVICE_NAME=composectl
 INSTALL_DIR=$(HOME)/.local/bin
 SYSTEMD_USER_DIR=$(HOME)/.config/systemd/user
 SERVICE_FILE=$(SYSTEMD_USER_DIR)/$(SERVICE_NAME).service
-WORKING_DIR=$(shell pwd)
+WORKING_DIR=$(HOME)/.local/containers
+PROD_ENV=$(WORKING_DIR)/prod.env
 
 # Build variables
 GO=go
@@ -38,8 +39,25 @@ test: ## Run tests
 install: build ## Install the application and set up systemd user service
 	@echo "Installing $(BINARY_NAME)..."
 
+	# Create containers directory structure
+	@mkdir -p $(WORKING_DIR)/stacks
+	@mkdir -p $(WORKING_DIR)/thumbnails
+	@echo "Created directory structure at $(WORKING_DIR)"
+
+	# Initialize prod.env if it doesn't exist
+	@if [ ! -f $(PROD_ENV) ]; then \
+		echo "# Auto-generated secrets for Docker Compose" > $(PROD_ENV); \
+		echo "# This file is managed automatically by composectl" >> $(PROD_ENV); \
+		echo "# Do not edit manually unless you know what you are doing" >> $(PROD_ENV); \
+		echo "" >> $(PROD_ENV); \
+		echo "ADMIN_PASSWORD=" >> $(PROD_ENV); \
+		echo "ADMIN_USERNAME=" >> $(PROD_ENV); \
+		chmod 600 $(PROD_ENV); \
+		echo "Created $(PROD_ENV)"; \
+	fi
+
 	# Check if credentials are configured
-	@if ! grep -q "^ADMIN_USERNAME=." prod.env 2>/dev/null || ! grep -q "^ADMIN_PASSWORD=." prod.env 2>/dev/null; then \
+	@if ! grep -q "^ADMIN_USERNAME=." $(PROD_ENV) 2>/dev/null || ! grep -q "^ADMIN_PASSWORD=." $(PROD_ENV) 2>/dev/null; then \
 		echo ""; \
 		echo "⚠️  Authentication credentials not configured!"; \
 		echo ""; \
@@ -165,9 +183,17 @@ update: build stop ## Update the binary and restart service
 setup-auth: ## Set up authentication credentials in prod.env
 	@echo "Setting up Basic Authentication credentials..."
 	@echo ""
-	@if grep -q "^ADMIN_USERNAME=" prod.env 2>/dev/null; then \
-		echo "Credentials already configured in prod.env"; \
-		echo "Current ADMIN_USERNAME: $$(grep '^ADMIN_USERNAME=' prod.env | cut -d= -f2)"; \
+	@mkdir -p $(WORKING_DIR)
+	@if [ ! -f $(PROD_ENV) ]; then \
+		echo "# Auto-generated secrets for Docker Compose" > $(PROD_ENV); \
+		echo "# This file is managed automatically by composectl" >> $(PROD_ENV); \
+		echo "# Do not edit manually unless you know what you are doing" >> $(PROD_ENV); \
+		echo "" >> $(PROD_ENV); \
+		chmod 600 $(PROD_ENV); \
+	fi
+	@if grep -q "^ADMIN_USERNAME=" $(PROD_ENV) 2>/dev/null; then \
+		echo "Credentials already configured in $(PROD_ENV)"; \
+		echo "Current ADMIN_USERNAME: $$(grep '^ADMIN_USERNAME=' $(PROD_ENV) | cut -d= -f2)"; \
 		echo ""; \
 		read -p "Do you want to update credentials? [y/N] " -n 1 -r; \
 		echo; \
@@ -183,15 +209,15 @@ setup-auth: ## Set up authentication credentials in prod.env
 		echo "Error: Username and password cannot be empty"; \
 		exit 1; \
 	fi; \
-	if grep -q "^ADMIN_USERNAME=" prod.env 2>/dev/null; then \
-		sed -i "s/^ADMIN_USERNAME=.*/ADMIN_USERNAME=$$username/" prod.env; \
-		sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$$password/" prod.env; \
+	if grep -q "^ADMIN_USERNAME=" $(PROD_ENV) 2>/dev/null; then \
+		sed -i "s/^ADMIN_USERNAME=.*/ADMIN_USERNAME=$$username/" $(PROD_ENV); \
+		sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$$password/" $(PROD_ENV); \
 	else \
-		echo "ADMIN_USERNAME=$$username" >> prod.env; \
-		echo "ADMIN_PASSWORD=$$password" >> prod.env; \
+		echo "ADMIN_USERNAME=$$username" >> $(PROD_ENV); \
+		echo "ADMIN_PASSWORD=$$password" >> $(PROD_ENV); \
 	fi; \
 	echo ""; \
-	echo "✓ Credentials configured successfully"; \
+	echo "✓ Credentials configured successfully in $(PROD_ENV)"; \
 	echo ""; \
 	echo "To apply changes, restart the service:"; \
 	echo "  make restart"

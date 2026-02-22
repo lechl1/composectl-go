@@ -781,8 +781,8 @@ func getRunningStacks() ([]Stack, error) {
 // getEffectiveComposeFile returns the path to the effective compose file for a stack
 // If the effective file exists, it returns that path; otherwise, it returns the regular .yml path
 func getEffectiveComposeFile(stackName string) string {
-	effectivePath := filepath.Join("stacks", stackName+".effective.yml")
-	regularPath := filepath.Join("stacks", stackName+".yml")
+	effectivePath := GetStackPath(stackName, true)
+	regularPath := GetStackPath(stackName, false)
 
 	// Check if effective file exists
 	if _, err := os.Stat(effectivePath); err == nil {
@@ -1020,10 +1020,8 @@ func extractVariableReferences(value string) []string {
 // by extracting plaintext passwords to prod.env and replacing them with variable references ${ENV_KEY}
 // If dryRun is true, it will skip writing to prod.env
 func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
-	const prodEnvPath = "prod.env"
-
 	// Read existing prod.env
-	envVars, err := readProdEnv(prodEnvPath)
+	envVars, err := readProdEnv(ProdEnvPath)
 	if err != nil {
 		log.Printf("Warning: Failed to read prod.env: %v", err)
 		envVars = make(map[string]string)
@@ -1281,7 +1279,7 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 
 	// Write back to prod.env if modified (skip if dry run)
 	if modified && !dryRun {
-		if err := writeProdEnv(prodEnvPath, envVars); err != nil {
+		if err := writeProdEnv(ProdEnvPath, envVars); err != nil {
 			log.Printf("Warning: Failed to write prod.env: %v", err)
 		} else {
 			log.Printf("Updated prod.env with extracted passwords and environment variables")
@@ -1477,7 +1475,7 @@ func HandleGetStack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Construct the file path in the stacks directory
-	filePath := filepath.Join("stacks", stackName+".yml")
+	filePath := GetStackPath(stackName, false)
 
 	// Check if file exists
 	var content []byte
@@ -1610,12 +1608,12 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 	}
 
 	// Construct the file paths
-	originalFilePath := filepath.Join("stacks", stackName+".yml")
-	effectiveFilePath := filepath.Join("stacks", stackName+".effective.yml")
+	originalFilePath := GetStackPath(stackName, false)
+	effectiveFilePath := GetStackPath(stackName, true)
 
 	if !dryRun {
 		// Ensure the stacks directory exists
-		if err := os.MkdirAll("stacks", 0755); err != nil {
+		if err := os.MkdirAll(StacksDir, 0755); err != nil {
 			log.Printf("Error creating stacks directory: %v", err)
 			http.Error(w, "Failed to create stacks directory", http.StatusInternalServerError)
 			return
@@ -2315,11 +2313,10 @@ func writeProdEnv(filePath string, envVars map[string]string) error {
 // ensureSecretsInProdEnv ensures all required secrets exist in prod.env file
 // Creates missing secrets with randomly generated passwords
 func ensureSecretsInProdEnv(secretNames []string) error {
-	const prodEnvPath = "prod.env"
 	const passwordLength = 24
 
 	// Read existing prod.env
-	envVars, err := readProdEnv(prodEnvPath)
+	envVars, err := readProdEnv(ProdEnvPath)
 	if err != nil {
 		return err
 	}
@@ -2346,7 +2343,7 @@ func ensureSecretsInProdEnv(secretNames []string) error {
 
 	// Write back to file if modified
 	if modified {
-		if err := writeProdEnv(prodEnvPath, envVars); err != nil {
+		if err := writeProdEnv(ProdEnvPath, envVars); err != nil {
 			return err
 		}
 		log.Printf("Updated prod.env with %d new secret(s)", len(secretNames))
@@ -2358,8 +2355,6 @@ func ensureSecretsInProdEnv(secretNames []string) error {
 // replaceEnvVarsInYAML reads a YAML file, replaces all ${VAR} placeholders with values from prod.env,
 // and returns the processed content as a string
 func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
-	const prodEnvPath = "prod.env"
-
 	// Read the YAML file
 	yamlContent, err := os.ReadFile(yamlFilePath)
 	if err != nil {
@@ -2367,7 +2362,7 @@ func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
 	}
 
 	// Read prod.env
-	envVars, err := readProdEnv(prodEnvPath)
+	envVars, err := readProdEnv(ProdEnvPath)
 	if err != nil {
 		log.Printf("Warning: Failed to read prod.env: %v", err)
 		envVars = make(map[string]string)
@@ -2457,10 +2452,8 @@ func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
 // setEnvFromProdEnv loads environment variables from prod.env and sets them on the command
 // DEPRECATED: This function is no longer used. We now replace variables directly in YAML and pipe to docker compose.
 func setEnvFromProdEnv(cmd *exec.Cmd) error {
-	const prodEnvPath = "prod.env"
-
 	// Read prod.env
-	envVars, err := readProdEnv(prodEnvPath)
+	envVars, err := readProdEnv(ProdEnvPath)
 	if err != nil {
 		log.Printf("Warning: Failed to read prod.env: %v", err)
 		// Continue with current environment
@@ -3177,8 +3170,8 @@ func HandleDeleteStack(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Successfully deleted stack: %s", stackName)
 
 	// Delete both the original and effective stack YAML files
-	originalFilePath := filepath.Join("stacks", stackName+".yml")
-	effectiveFilePath := filepath.Join("stacks", stackName+".effective.yml")
+	originalFilePath := GetStackPath(stackName, false)
+	effectiveFilePath := GetStackPath(stackName, true)
 
 	if err := os.Remove(originalFilePath); err != nil {
 		// Log warning but don't fail the operation since containers are already removed
@@ -3220,10 +3213,9 @@ func getStacksData() ([]Stack, error) {
 	}
 
 	// Get available YAML files from stacks directory
-	stacksDir := "stacks"
 	ymlStacks := make(map[string]string) // stackName -> filePath
 
-	entries, err := os.ReadDir(stacksDir)
+	entries, err := os.ReadDir(StacksDir)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("failed to read stacks directory: %w", err)
 	}
@@ -3233,7 +3225,7 @@ func getStacksData() ([]Stack, error) {
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".yml") && !strings.HasSuffix(entry.Name(), ".effective.yml") {
 				stackName := strings.TrimSuffix(entry.Name(), ".yml")
-				ymlStacks[stackName] = filepath.Join(stacksDir, entry.Name())
+				ymlStacks[stackName] = filepath.Join(StacksDir, entry.Name())
 			}
 		}
 	}
