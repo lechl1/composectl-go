@@ -156,7 +156,7 @@ func getConfig(args []string, key string, defaultValue string) string {
 // 5. Check default Docker secrets location (/run/secrets/PORT - case insensitive)
 // 6. Default to "8080"
 func GetPort(args []string) string {
-	return getConfig(args, "port", "8080")
+	return getConfig(args, "port", "8882")
 }
 
 // GetAddr retrieves the ADDR configuration with the following priority:
