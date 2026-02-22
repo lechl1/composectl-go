@@ -50,8 +50,6 @@ install: build ## Install the application and set up systemd user service
 		echo "# This file is managed automatically by composectl" >> $(PROD_ENV); \
 		echo "# Do not edit manually unless you know what you are doing" >> $(PROD_ENV); \
 		echo "" >> $(PROD_ENV); \
-		echo "ADMIN_PASSWORD=" >> $(PROD_ENV); \
-		echo "ADMIN_USERNAME=" >> $(PROD_ENV); \
 		chmod 600 $(PROD_ENV); \
 		echo "Created $(PROD_ENV)"; \
 	fi

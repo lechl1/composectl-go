@@ -8,6 +8,13 @@ import (
 )
 
 func main() {
+	// Ensure admin credentials exist before starting server
+	username, _, err := GetAdminCredentials(os.Args)
+	if err != nil {
+		log.Fatalf("Failed to initialize admin credentials: %v", err)
+	}
+	log.Printf("Authentication configured for user: %s", username)
+
 	go HandleBroadcast()
 	go WatchFiles()
 
