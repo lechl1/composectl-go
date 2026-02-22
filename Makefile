@@ -1,4 +1,4 @@
-.PHONY: build install uninstall start stop restart status enable disable clean test help
+.PHONY: build install uninstall start stop restart status enable disable clean test help setup-auth
 
 # Binary and service names
 BINARY_NAME=composectl
@@ -37,6 +37,25 @@ test: ## Run tests
 
 install: build ## Install the application and set up systemd user service
 	@echo "Installing $(BINARY_NAME)..."
+
+	# Check if credentials are configured
+	@if ! grep -q "^ADMIN_USERNAME=." prod.env 2>/dev/null || ! grep -q "^ADMIN_PASSWORD=." prod.env 2>/dev/null; then \
+		echo ""; \
+		echo "⚠️  Authentication credentials not configured!"; \
+		echo ""; \
+		echo "Basic Authentication is required to access the application."; \
+		echo "Please set up credentials now or run 'make setup-auth' later."; \
+		echo ""; \
+		read -p "Set up credentials now? [Y/n] " -n 1 -r; \
+		echo; \
+		if [[ ! $$REPLY =~ ^[Nn]$$ ]]; then \
+			$(MAKE) setup-auth; \
+		else \
+			echo "⚠️  Warning: Application will not be accessible until credentials are configured!"; \
+			echo "Run 'make setup-auth' to configure credentials later."; \
+			echo ""; \
+		fi; \
+	fi
 
 	# Create installation directory if it doesn't exist
 	@mkdir -p $(INSTALL_DIR)
@@ -142,4 +161,38 @@ update: build stop ## Update the binary and restart service
 	@chmod +x $(INSTALL_DIR)/$(BINARY_NAME)
 	@echo "Binary updated"
 	@$(MAKE) start
+
+setup-auth: ## Set up authentication credentials in prod.env
+	@echo "Setting up Basic Authentication credentials..."
+	@echo ""
+	@if grep -q "^ADMIN_USERNAME=" prod.env 2>/dev/null; then \
+		echo "Credentials already configured in prod.env"; \
+		echo "Current ADMIN_USERNAME: $$(grep '^ADMIN_USERNAME=' prod.env | cut -d= -f2)"; \
+		echo ""; \
+		read -p "Do you want to update credentials? [y/N] " -n 1 -r; \
+		echo; \
+		if [[ ! $$REPLY =~ ^[Yy]$$ ]]; then \
+			echo "Keeping existing credentials"; \
+			exit 0; \
+		fi; \
+	fi; \
+	read -p "Enter admin username: " username; \
+	read -sp "Enter admin password: " password; \
+	echo; \
+	if [ -z "$$username" ] || [ -z "$$password" ]; then \
+		echo "Error: Username and password cannot be empty"; \
+		exit 1; \
+	fi; \
+	if grep -q "^ADMIN_USERNAME=" prod.env 2>/dev/null; then \
+		sed -i "s/^ADMIN_USERNAME=.*/ADMIN_USERNAME=$$username/" prod.env; \
+		sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$$password/" prod.env; \
+	else \
+		echo "ADMIN_USERNAME=$$username" >> prod.env; \
+		echo "ADMIN_PASSWORD=$$password" >> prod.env; \
+	fi; \
+	echo ""; \
+	echo "✓ Credentials configured successfully"; \
+	echo ""; \
+	echo "To apply changes, restart the service:"; \
+	echo "  make restart"
 
