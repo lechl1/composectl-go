@@ -830,8 +830,9 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 				// If sensitive and has a value, save to prod.env
 				if isSensitive && value != "" && !strings.HasPrefix(value, "${") && !strings.HasPrefix(value, "/run/secrets/") {
 					normalizedKey := normalizeEnvKey(key)
-					// Only save if not already in prod.env
+					// Passwords should not be fetched from runtime environment - only save to prod.env
 					if _, exists := envVars[normalizedKey]; !exists {
+						// Only save if not already in prod.env
 						envVars[normalizedKey] = value
 						modified = true
 						log.Printf("Extracted password '%s' to prod.env from service '%s'", normalizedKey, serviceName)
@@ -844,8 +845,11 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 					for _, varName := range extractedVars {
 						// Normalize the variable name before saving
 						normalizedVarName := normalizeEnvKey(varName)
-						// Only add if not already in prod.env
-						if _, exists := envVars[normalizedVarName]; !exists {
+						// Check if variable is available in runtime environment
+						if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
+							log.Printf("Environment variable '%s' is available from runtime environment, skipping prod.env", normalizedVarName)
+						} else if _, exists := envVars[normalizedVarName]; !exists {
+							// Only add if not already in prod.env and not in runtime
 							envVars[normalizedVarName] = "" // Add with empty value as placeholder
 							modified = true
 							log.Printf("Added environment variable '%s' to prod.env from service '%s'", normalizedVarName, serviceName)
@@ -876,8 +880,11 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 							for _, varName := range extractedVars {
 								// Normalize the variable name before saving
 								normalizedVarName := normalizeEnvKey(varName)
-								// Only add if not already in prod.env
-								if _, exists := envVars[normalizedVarName]; !exists {
+								// Check if variable is available in runtime environment
+								if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
+									log.Printf("Environment variable '%s' is available from runtime environment, skipping prod.env", normalizedVarName)
+								} else if _, exists := envVars[normalizedVarName]; !exists {
+									// Only add if not already in prod.env and not in runtime
 									envVars[normalizedVarName] = "" // Add with empty value as placeholder
 									modified = true
 									log.Printf("Added environment variable '%s' to prod.env from service '%s' labels", normalizedVarName, serviceName)
@@ -893,8 +900,11 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 						for _, varName := range extractedVars {
 							// Normalize the variable name before saving
 							normalizedVarName := normalizeEnvKey(varName)
-							// Only add if not already in prod.env
-							if _, exists := envVars[normalizedVarName]; !exists {
+							// Check if variable is available in runtime environment
+							if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
+								log.Printf("Environment variable '%s' is available from runtime environment, skipping prod.env", normalizedVarName)
+							} else if _, exists := envVars[normalizedVarName]; !exists {
+								// Only add if not already in prod.env and not in runtime
 								envVars[normalizedVarName] = "" // Add with empty value as placeholder
 								modified = true
 								log.Printf("Added environment variable '%s' to prod.env from service '%s' labels", normalizedVarName, serviceName)
@@ -915,8 +925,11 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 				for _, varName := range extractedVars {
 					// Normalize the variable name before saving
 					normalizedVarName := normalizeEnvKey(varName)
-					// Only add if not already in prod.env
-					if _, exists := envVars[normalizedVarName]; !exists {
+					// Check if variable is available in runtime environment
+					if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
+						log.Printf("Environment variable '%s' is available from runtime environment, skipping prod.env", normalizedVarName)
+					} else if _, exists := envVars[normalizedVarName]; !exists {
+						// Only add if not already in prod.env and not in runtime
 						envVars[normalizedVarName] = "" // Add with empty value as placeholder
 						modified = true
 						log.Printf("Added environment variable '%s' to prod.env from config '%s'", normalizedVarName, configName)
@@ -928,7 +941,11 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 				extractedVars := extractVariableReferences(config.File)
 				for _, varName := range extractedVars {
 					normalizedVarName := normalizeEnvKey(varName)
-					if _, exists := envVars[normalizedVarName]; !exists {
+					// Check if variable is available in runtime environment
+					if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
+						log.Printf("Environment variable '%s' is available from runtime environment, skipping prod.env", normalizedVarName)
+					} else if _, exists := envVars[normalizedVarName]; !exists {
+						// Only add if not already in prod.env and not in runtime
 						envVars[normalizedVarName] = ""
 						modified = true
 						log.Printf("Added environment variable '%s' to prod.env from config '%s' file path", normalizedVarName, configName)
@@ -945,7 +962,11 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 				extractedVars := extractVariableReferences(volume.Name)
 				for _, varName := range extractedVars {
 					normalizedVarName := normalizeEnvKey(varName)
-					if _, exists := envVars[normalizedVarName]; !exists {
+					// Check if variable is available in runtime environment
+					if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
+						log.Printf("Environment variable '%s' is available from runtime environment, skipping prod.env", normalizedVarName)
+					} else if _, exists := envVars[normalizedVarName]; !exists {
+						// Only add if not already in prod.env and not in runtime
 						envVars[normalizedVarName] = ""
 						modified = true
 						log.Printf("Added environment variable '%s' to prod.env from volume '%s'", normalizedVarName, volumeName)
@@ -957,7 +978,11 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 					extractedVars := extractVariableReferences(optValue)
 					for _, varName := range extractedVars {
 						normalizedVarName := normalizeEnvKey(varName)
-						if _, exists := envVars[normalizedVarName]; !exists {
+						// Check if variable is available in runtime environment
+						if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
+							log.Printf("Environment variable '%s' is available from runtime environment, skipping prod.env", normalizedVarName)
+						} else if _, exists := envVars[normalizedVarName]; !exists {
+							// Only add if not already in prod.env and not in runtime
 							envVars[normalizedVarName] = ""
 							modified = true
 							log.Printf("Added environment variable '%s' to prod.env from volume '%s' driver opts", normalizedVarName, volumeName)
@@ -975,7 +1000,11 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 			extractedVars := extractVariableReferences(volumeMount)
 			for _, varName := range extractedVars {
 				normalizedVarName := normalizeEnvKey(varName)
-				if _, exists := envVars[normalizedVarName]; !exists {
+				// Check if variable is available in runtime environment
+				if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
+					log.Printf("Environment variable '%s' is available from runtime environment, skipping prod.env", normalizedVarName)
+				} else if _, exists := envVars[normalizedVarName]; !exists {
+					// Only add if not already in prod.env and not in runtime
 					envVars[normalizedVarName] = ""
 					modified = true
 					log.Printf("Added environment variable '%s' to prod.env from service '%s' volume mounts", normalizedVarName, serviceName)
@@ -1000,7 +1029,11 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 				extractedVars := extractVariableReferences(cmdStr)
 				for _, varName := range extractedVars {
 					normalizedVarName := normalizeEnvKey(varName)
-					if _, exists := envVars[normalizedVarName]; !exists {
+					// Check if variable is available in runtime environment
+					if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
+						log.Printf("Environment variable '%s' is available from runtime environment, skipping prod.env", normalizedVarName)
+					} else if _, exists := envVars[normalizedVarName]; !exists {
+						// Only add if not already in prod.env and not in runtime
 						envVars[normalizedVarName] = ""
 						modified = true
 						log.Printf("Added environment variable '%s' to prod.env from service '%s' command", normalizedVarName, serviceName)
@@ -1014,7 +1047,11 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 			extractedVars := extractVariableReferences(service.Image)
 			for _, varName := range extractedVars {
 				normalizedVarName := normalizeEnvKey(varName)
-				if _, exists := envVars[normalizedVarName]; !exists {
+				// Check if variable is available in runtime environment
+				if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
+					log.Printf("Environment variable '%s' is available from runtime environment, skipping prod.env", normalizedVarName)
+				} else if _, exists := envVars[normalizedVarName]; !exists {
+					// Only add if not already in prod.env and not in runtime
 					envVars[normalizedVarName] = ""
 					modified = true
 					log.Printf("Added environment variable '%s' to prod.env from service '%s' image", normalizedVarName, serviceName)
@@ -2109,6 +2146,7 @@ func ensureSecretsInProdEnv(secretNames []string) error {
 
 	// Check each secret
 	for _, secretName := range secretNames {
+		// Secrets should not be fetched from runtime environment - only from prod.env
 		if _, exists := envVars[secretName]; !exists {
 			// Generate a new password
 			password, err := generateRandomPassword(passwordLength)
@@ -2162,11 +2200,24 @@ func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
 	content = re.ReplaceAllStringFunc(content, func(match string) string {
 		// Extract variable name from ${VAR}
 		varName := match[2 : len(match)-1]
+		// Check if this is a sensitive variable - if so, only use prod.env
+		if isSensitiveEnvironmentKey(varName, "") {
+			// For sensitive variables (passwords), only check prod.env, never runtime environment
+			if value, exists := envVars[varName]; exists {
+				return value
+			}
+			log.Printf("Warning: Sensitive variable %s not found in prod.env", varName)
+			return "" // Replace with empty string if not found
+		}
+		// For non-sensitive variables, check runtime environment first, then prod.env
+		if runtimeValue := os.Getenv(varName); runtimeValue != "" {
+			return runtimeValue
+		}
 		if value, exists := envVars[varName]; exists {
 			return value
 		}
 		// If variable not found, leave it as is (or return empty string)
-		log.Printf("Warning: Environment variable %s not found in prod.env", varName)
+		log.Printf("Warning: Environment variable %s not found in runtime or prod.env", varName)
 		return "" // Replace with empty string if not found
 	})
 
@@ -2181,10 +2232,23 @@ func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
 			trailingChar = string(varName[len(varName)-1])
 			varName = varName[:len(varName)-1]
 		}
+		// Check if this is a sensitive variable - if so, only use prod.env
+		if isSensitiveEnvironmentKey(varName, "") {
+			// For sensitive variables (passwords), only check prod.env, never runtime environment
+			if value, exists := envVars[varName]; exists {
+				return value + trailingChar
+			}
+			log.Printf("Warning: Sensitive variable %s not found in prod.env", varName)
+			return trailingChar // Return just the trailing char if variable not found
+		}
+		// For non-sensitive variables, check runtime environment first, then prod.env
+		if runtimeValue := os.Getenv(varName); runtimeValue != "" {
+			return runtimeValue + trailingChar
+		}
 		if value, exists := envVars[varName]; exists {
 			return value + trailingChar
 		}
-		log.Printf("Warning: Environment variable %s not found in prod.env", varName)
+		log.Printf("Warning: Environment variable %s not found in runtime or prod.env", varName)
 		return trailingChar // Return just the trailing char if variable not found
 	})
 
