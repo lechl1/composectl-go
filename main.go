@@ -8,6 +8,9 @@ import (
 )
 
 func main() {
+	// Initialize paths first (respects --stacks-dir and --env-path arguments)
+	InitPaths(os.Args)
+
 	// Ensure admin credentials exist before starting server
 	username, _, err := GetAdminCredentials(os.Args)
 	if err != nil {

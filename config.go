@@ -12,50 +12,59 @@ import (
 )
 
 var (
-	// ContainersDir is the base directory for all composectl data
-	ContainersDir string
-
-	// StacksDir is the directory containing stack YAML files
+	// StacksDir is the directory containing stack YAML files and all composectl data
 	StacksDir string
 
 	// ProdEnvPath is the path to the prod.env file
 	ProdEnvPath string
+
+	// initialized tracks whether paths have been initialized
+	initialized bool
 )
 
-func init() {
+// getDefaultStacksDir returns the default stacks directory with priority:
+// 1. /containers if it exists
+// 2. /stacks if it exists
+// 3. Default to $HOME/.local/containers
+func getDefaultStacksDir() string {
+	if info, err := os.Stat("/containers"); err == nil && info.IsDir() {
+		return "/containers"
+	}
+	if info, err := os.Stat("/stacks"); err == nil && info.IsDir() {
+		return "/stacks"
+	}
+
 	// Get user's home directory
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		log.Fatalf("Failed to get user home directory: %v", err)
 	}
-
-	// Set base directory to $HOME/.local/containers
-	ContainersDir = filepath.Join(homeDir, ".local", "containers")
-
-	// Set subdirectories and files
-	StacksDir = filepath.Join(ContainersDir, "stacks")
-	ProdEnvPath = filepath.Join(ContainersDir, "prod.env")
-
-	// Ensure directories exist
-	ensureDirectories()
+	return filepath.Join(homeDir, ".local", "containers")
 }
 
-// ensureDirectories creates necessary directories if they don't exist
-func ensureDirectories() {
-	dirs := []string{
-		ContainersDir,
-		StacksDir,
+// InitPaths initializes StacksDir and ProdEnvPath using command-line arguments
+func InitPaths(args []string) {
+	if initialized {
+		return
 	}
 
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			log.Printf("Warning: Failed to create directory %s: %v", dir, err)
-		}
+	// Get stacks directory from config (respects --stacks-dir argument)
+	StacksDir = getConfig(args, "stacks_dir", getDefaultStacksDir())
+
+	// Get prod.env path from config (respects --env-path argument)
+	// Default to StacksDir/prod.env if not specified
+	defaultEnvPath := filepath.Join(StacksDir, "prod.env")
+	ProdEnvPath = getConfig(args, "env_path", defaultEnvPath)
+
+	// Ensure directories exist
+	if err := os.MkdirAll(StacksDir, 0755); err != nil {
+		log.Printf("Warning: Failed to create directory %s: %v", StacksDir, err)
 	}
 
-	log.Printf("Using containers directory: %s", ContainersDir)
-	log.Printf("Stacks directory: %s", StacksDir)
+	log.Printf("Using stacks directory: %s", StacksDir)
 	log.Printf("Prod.env path: %s", ProdEnvPath)
+
+	initialized = true
 }
 
 // GetStackPath returns the full path to a stack file
@@ -71,7 +80,7 @@ func GetStackPath(stackName string, effective bool) string {
 // 1. Check program arguments for -key or --key flag
 // 2. Check KEY_FILE env var (Docker secrets pattern)
 // 3. Check KEY env var
-// 4. Check prod.env file (case insensitive)
+// 4. Check prod.env file (case insensitive) - only if ProdEnvPath is initialized
 // 5. Check default Docker secrets location (/run/secrets/KEY - case insensitive)
 // 6. Return provided default value
 func getConfig(args []string, key string, defaultValue string) string {
@@ -85,8 +94,10 @@ func getConfig(args []string, key string, defaultValue string) string {
 
 	// Check program arguments first
 	for i, arg := range args {
-		argFlag := "-" + keyLower
-		argFlagDouble := "--" + keyLower
+		// Replace underscores with dashes for command-line flag names
+		keyFlag := strings.ReplaceAll(keyLower, "_", "-")
+		argFlag := "-" + keyFlag
+		argFlagDouble := "--" + keyFlag
 
 		if (arg == argFlag || arg == argFlagDouble) && i+1 < len(args) {
 			log.Printf("Loaded %s from program arguments: %s", keyUpper, args[i+1])
@@ -121,16 +132,19 @@ func getConfig(args []string, key string, defaultValue string) string {
 		return value
 	}
 
-	// Check prod.env (case insensitive)
-	envVars, err := readProdEnv(ProdEnvPath)
-	if err != nil {
-		log.Printf("Warning: Failed to read prod.env for %s: %v", keyUpper, err)
-	} else {
-		// Try case-insensitive lookup
-		for envKey, value := range envVars {
-			if strings.ToLower(envKey) == keyLower {
-				log.Printf("Loaded %s from prod.env: %s", keyUpper, envKey)
-				return value
+	// Check prod.env (case insensitive) - only if ProdEnvPath is initialized
+	// This avoids circular dependency during path initialization
+	if ProdEnvPath != "" {
+		envVars, err := readProdEnv(ProdEnvPath)
+		if err != nil {
+			log.Printf("Warning: Failed to read prod.env for %s: %v", keyUpper, err)
+		} else {
+			// Try case-insensitive lookup
+			for envKey, value := range envVars {
+				if strings.ToLower(envKey) == keyLower {
+					log.Printf("Loaded %s from prod.env: %s", keyUpper, envKey)
+					return value
+				}
 			}
 		}
 	}
