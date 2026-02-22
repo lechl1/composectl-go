@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -39,6 +40,8 @@ func forceMultilineInYAML(node *yaml.Node) {
 			forceMultilineInYAML(child)
 		}
 	case yaml.MappingNode:
+		// Sort the mapping node to maintain consistent ordering
+		sortMappingNode(node)
 		// Process all key-value pairs in the mapping
 		for _, child := range node.Content {
 			forceMultilineInYAML(child)
@@ -56,7 +59,44 @@ func forceMultilineInYAML(node *yaml.Node) {
 	}
 }
 
+// sortMappingNode sorts the key-value pairs in a mapping node alphabetically by key
+func sortMappingNode(node *yaml.Node) {
+	if node.Kind != yaml.MappingNode || len(node.Content) == 0 {
+		return
+	}
+
+	// Mapping nodes have alternating key-value pairs in Content
+	// We need to sort by keys while keeping key-value pairs together
+	type keyValuePair struct {
+		key   *yaml.Node
+		value *yaml.Node
+	}
+
+	var pairs []keyValuePair
+	for i := 0; i < len(node.Content); i += 2 {
+		if i+1 < len(node.Content) {
+			pairs = append(pairs, keyValuePair{
+				key:   node.Content[i],
+				value: node.Content[i+1],
+			})
+		}
+	}
+
+	// Sort pairs by key value
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].key.Value < pairs[j].key.Value
+	})
+
+	// Rebuild the Content slice with sorted pairs
+	newContent := make([]*yaml.Node, 0, len(node.Content))
+	for _, pair := range pairs {
+		newContent = append(newContent, pair.key, pair.value)
+	}
+	node.Content = newContent
+}
+
 // encodeYAMLWithMultiline encodes a value to YAML with multiline strings properly formatted
+// and preserves the order of map entries
 func encodeYAMLWithMultiline(buf *strings.Builder, value interface{}) error {
 	// First, marshal to a YAML node
 	var node yaml.Node
@@ -67,7 +107,7 @@ func encodeYAMLWithMultiline(buf *strings.Builder, value interface{}) error {
 	// Process the node to set multiline style
 	forceMultilineInYAML(&node)
 
-	// Now encode the processed node
+	// Now encode the processed node with proper indentation
 	encoder := yaml.NewEncoder(buf)
 	encoder.SetIndent(2)
 
