@@ -2376,6 +2376,9 @@ func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
 	// Convert to string for replacement
 	content := string(yamlContent)
 
+	// Track undefined variables
+	undefinedVars := make(map[string]bool)
+
 	// Replace all ${VAR} and $VAR patterns with actual values
 	// First handle ${VAR} format
 	re := regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
@@ -2388,7 +2391,8 @@ func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
 			if value, exists := envVars[varName]; exists {
 				return value
 			}
-			log.Printf("Warning: Sensitive variable %s not found in prod.env", varName)
+			log.Printf("Error: Sensitive variable %s not found in prod.env", varName)
+			undefinedVars[varName] = true
 			return "" // Replace with empty string if not found
 		}
 		// For non-sensitive variables, check runtime environment first, then prod.env
@@ -2398,8 +2402,9 @@ func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
 		if value, exists := envVars[varName]; exists {
 			return value
 		}
-		// If variable not found, leave it as is (or return empty string)
-		log.Printf("Warning: Environment variable %s not found in runtime or prod.env", varName)
+		// If variable not found, track it as undefined
+		log.Printf("Error: Environment variable %s not found in runtime or prod.env", varName)
+		undefinedVars[varName] = true
 		return "" // Replace with empty string if not found
 	})
 
@@ -2420,7 +2425,8 @@ func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
 			if value, exists := envVars[varName]; exists {
 				return value + trailingChar
 			}
-			log.Printf("Warning: Sensitive variable %s not found in prod.env", varName)
+			log.Printf("Error: Sensitive variable %s not found in prod.env", varName)
+			undefinedVars[varName] = true
 			return trailingChar // Return just the trailing char if variable not found
 		}
 		// For non-sensitive variables, check runtime environment first, then prod.env
@@ -2430,9 +2436,20 @@ func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
 		if value, exists := envVars[varName]; exists {
 			return value + trailingChar
 		}
-		log.Printf("Warning: Environment variable %s not found in runtime or prod.env", varName)
+		log.Printf("Error: Environment variable %s not found in runtime or prod.env", varName)
+		undefinedVars[varName] = true
 		return trailingChar // Return just the trailing char if variable not found
 	})
+
+	// If there are undefined variables, return an error
+	if len(undefinedVars) > 0 {
+		varList := make([]string, 0, len(undefinedVars))
+		for varName := range undefinedVars {
+			varList = append(varList, varName)
+		}
+		sort.Strings(varList)
+		return "", fmt.Errorf("undefined variables: %s", strings.Join(varList, ", "))
+	}
 
 	return content, nil
 }
