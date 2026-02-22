@@ -1,0 +1,35 @@
+services:
+  dcapi:
+    image: dcapi:latest
+    container_name: dcapi
+    environment:
+      - TZ=America/New_York
+      # - ADMIN_USERNAME=admin
+      # - ADMIN_PASSWORD=your_secure_password # Will be auto-generated if not provided
+      # - ADMIN_USERNAME_FILE=/run/secrets/admin_username
+      # - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
+    volumes:
+      - /run/user/${UID}/docker.sock:/var/run/docker.sock:ro
+      - ${HOME}/.local/containers:/containers # or /stacks
+    # - secrets:
+    #   - admin_username
+    #   - admin_password
+    ports:
+      - "8882:8882"
+    networks:
+      - dcapi
+    restart: unless-stopped
+
+volumes:
+  dcapi-data:
+    driver: local
+
+networks:
+  dcapi:
+    driver: bridge
+
+# secrets:
+#   admin_username:
+#     file: ./secrets/admin_username.txt
+#   admin_password:
+#     file: ./secrets/admin_password.txt
