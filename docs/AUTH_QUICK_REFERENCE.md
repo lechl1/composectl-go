@@ -8,8 +8,8 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your_secure_password
 
 # 2. Build and run
-go build -o composectl
-./composectl
+go build -o dcapi
+./dcapi
 ```
 
 ## 🔐 Authentication

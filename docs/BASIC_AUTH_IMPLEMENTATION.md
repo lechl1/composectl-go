@@ -227,7 +227,7 @@ Regular string comparison (`==`) can be vulnerable to timing attacks where an at
 5. **Monitor Access**
    ```bash
    # Check logs for failed auth attempts
-   journalctl --user -u composectl.service | grep "401"
+   journalctl --user -u dcapi.service | grep "401"
    ```
 
 ## Troubleshooting

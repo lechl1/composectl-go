@@ -128,7 +128,7 @@ When a sensitive variable is detected:
 **prod.env file:**
 ```bash
 # Auto-generated secrets for Docker Compose
-# This file is managed automatically by composectl
+# This file is managed automatically by dcapi
 # Do not edit manually unless you know what you are doing
 
 GITEA_DATABASE_PASSWD=awefsdzfasf
@@ -169,7 +169,7 @@ This implementation reuses the existing password detection logic:
 ## Testing
 
 To test the implementation:
-1. Start the composectl server
+1. Start the dcapi server
 2. Send a PUT request with a YAML containing plaintext passwords
 3. Verify that `.yml` has sanitized passwords
 4. Verify that `.effective.yml` has plaintext passwords

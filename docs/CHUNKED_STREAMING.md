@@ -128,13 +128,13 @@ Each line is prefixed with a tag indicating the source:
 ### Example Output
 
 ```
-[INFO] Creating network: composectl_traefik with driver: bridge
+[INFO] Creating network: dcapi_traefik with driver: bridge
 [STDOUT] a1b2c3d4e5f6
 [DONE] Command completed successfully
 [INFO] Volume already exists: postgres_data
-[INFO] Creating network: composectl_traefik with driver: bridge
-[STDOUT] Network composectl_traefik  Creating
-[STDOUT] Network composectl_traefik  Created
+[INFO] Creating network: dcapi_traefik with driver: bridge
+[STDOUT] Network dcapi_traefik  Creating
+[STDOUT] Network dcapi_traefik  Created
 [STDOUT] Container postgres-postgres-1  Creating
 [STDOUT] Container postgres-postgres-1  Created
 [STDOUT] Container postgres-pgweb-1  Creating

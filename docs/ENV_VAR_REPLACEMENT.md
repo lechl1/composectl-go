@@ -2,7 +2,7 @@
 
 ## Overview
 
-The composectl application has been updated to **replace environment variables directly in the Docker Compose YAML content** and pipe it to `docker compose` via stdin, rather than using the `--env-file` argument or setting environment variables on the command.
+The dcapi application has been updated to **replace environment variables directly in the Docker Compose YAML content** and pipe it to `docker compose` via stdin, rather than using the `--env-file` argument or setting environment variables on the command.
 
 ## Why This Approach?
 
@@ -156,7 +156,7 @@ environment:
 ### Testing
 Build the application:
 ```bash
-go build -o composectl
+go build -o dcapi
 ```
 
 Test with the manual script:
@@ -198,4 +198,4 @@ To see the replaced YAML content before piping to docker compose, check the appl
 Possible improvements:
 - Add validation to ensure all variables are defined
 - Support for default values: `${VAR:-default}`
-- Export replaced YAML for debugging: `composectl export <stack>`
+- Export replaced YAML for debugging: `dcapi export <stack>`

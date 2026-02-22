@@ -1,7 +1,8 @@
 .idea
-dockerctl
-stackctl
-composectl
+dcapi
+dcctl
+dctl
+dapi
 stacks
 thumbnails
 *.log

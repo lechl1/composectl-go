@@ -63,15 +63,15 @@ Successfully enhanced the chunked streaming implementation to stream **ALL** doc
 ## Example Complete Output Stream
 
 ```
-[INFO] Creating network: composectl_traefik with driver: bridge
+[INFO] Creating network: dcapi_traefik with driver: bridge
 [STDOUT] a1b2c3d4e5f6890abcdef123456
 [DONE] Command completed successfully
 [INFO] Volume already exists: postgres_data
 [INFO] Creating volume: postgres_backup with driver: local
 [STDOUT] postgres_backup
 [DONE] Command completed successfully
-[STDOUT]  Network composectl_traefik  Creating
-[STDOUT]  Network composectl_traefik  Created
+[STDOUT]  Network dcapi_traefik  Creating
+[STDOUT]  Network dcapi_traefik  Created
 [STDOUT]  Container postgres-postgres-1  Creating
 [STDOUT]  Container postgres-postgres-1  Created
 [STDOUT]  Container postgres-pgweb-1  Creating
@@ -120,7 +120,7 @@ Functions work with or without ResponseWriter parameter.
 ### Quick Test
 ```bash
 # Start server
-./composectl
+./dcapi
 
 # Test streaming (in another terminal)
 curl -N -X PUT http://localhost:8080/api/stacks/postgres/start \
@@ -199,8 +199,8 @@ X-Content-Type-Options: nosniff
 
 ### Before Enhancement
 ```
-[STDOUT] Network composectl_traefik  Creating
-[STDOUT] Network composectl_traefik  Created
+[STDOUT] Network dcapi_traefik  Creating
+[STDOUT] Network dcapi_traefik  Created
 [STDOUT] Container postgres-1  Creating
 [DONE] Command completed successfully
 ```
@@ -211,14 +211,14 @@ X-Content-Type-Options: nosniff
 
 ### After Enhancement
 ```
-[INFO] Creating network: composectl_traefik with driver: bridge
+[INFO] Creating network: dcapi_traefik with driver: bridge
 [STDOUT] a1b2c3d4e5f6890abcdef123456
 [DONE] Command completed successfully
 [INFO] Creating volume: postgres_data with driver: local
 [STDOUT] postgres_data
 [DONE] Command completed successfully
-[STDOUT] Network composectl_traefik  Creating
-[STDOUT] Network composectl_traefik  Created
+[STDOUT] Network dcapi_traefik  Creating
+[STDOUT] Network dcapi_traefik  Created
 [STDOUT] Container postgres-1  Creating
 [DONE] Command completed successfully
 ```
@@ -256,7 +256,7 @@ When a stack fails to start, you can now see:
 
 ## Next Steps for Users
 
-1. **Build:** `go build -o composectl`
+1. **Build:** `go build -o dcapi`
 2. **Test:** Use `curl -N` or provided test scripts
 3. **Deploy:** Replace existing binary
 4. **Monitor:** Watch logs to see complete operation visibility

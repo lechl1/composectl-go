@@ -92,7 +92,7 @@ When an environment variable has a value like `/run/secrets/POSTGRES_PASSWORD`:
 ### prod.env File Format
 ```
 # Auto-generated secrets for Docker Compose
-# This file is managed automatically by composectl
+# This file is managed automatically by dcapi
 # Do not edit manually unless you know what you are doing
 
 API_KEY=X9mK.p3_n2+L8-qW5.vR4_zA7+bT1-gH6.yN0_sM2+

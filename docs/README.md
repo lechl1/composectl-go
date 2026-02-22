@@ -120,7 +120,7 @@ make build
 ### Project Structure
 
 ```
-composectl-go/
+dcapi-go/
 ├── main.go           # Application entry point
 ├── auth.go           # Basic Authentication middleware
 ├── server.go         # HTTP server and routing
@@ -174,7 +174,7 @@ Ensure both `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set.
 
 Check if the service is enabled:
 ```bash
-systemctl --user is-enabled composectl.service
+systemctl --user is-enabled dcapi.service
 ```
 
 Enable if needed:

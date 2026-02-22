@@ -2,7 +2,109 @@
 
 ## Overview
 
-The composectl-go application now automatically manages Docker Compose secrets when environment variables reference `/run/secrets/` paths. It also automatically generates and manages secret values in a `prod.env` file.
+The dcapi-go application now automatically manages Docker Compose secrets when environment variables reference `/run/secrets/` paths. It also automatically generates and manages secret values in a `prod.env` file.
+
+## Admin Authentication with Docker Secrets
+
+ComposeCTL supports Docker secrets for admin authentication credentials with the following priority order:
+
+### Priority Order
+
+1. **`ADMIN_USERNAME_FILE` and `ADMIN_PASSWORD_FILE` environment variables** - Point to custom file paths
+2. **Default Docker secrets location** - `/run/secrets/ADMIN_USERNAME` and `/run/secrets/ADMIN_PASSWORD`
+3. **Direct environment variables** - `ADMIN_USERNAME` and `ADMIN_PASSWORD`
+4. **prod.env file** - Fallback to credentials in the prod.env file
+
+### Using Docker Secrets
+
+#### Method 1: Using Docker Compose Secrets (Recommended)
+
+Create a `docker-compose.yml` for ComposeCTL:
+
+```yaml
+version: '3.8'
+
+services:
+  dcapi:
+    image: dcapi:latest
+    environment:
+      - ADMIN_USERNAME_FILE=/run/secrets/admin_username
+      - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
+    secrets:
+      - admin_username
+      - admin_password
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+secrets:
+  admin_username:
+    file: ./secrets/admin_username.txt
+  admin_password:
+    file: ./secrets/admin_password.txt
+```
+
+Create the secret files:
+
+```bash
+mkdir -p secrets
+echo "myadmin" > secrets/admin_username.txt
+echo "mysecurepassword" > secrets/admin_password.txt
+chmod 600 secrets/*.txt
+```
+
+#### Method 2: Using Default Docker Secrets Location
+
+If you don't specify `*_FILE` environment variables, ComposeCTL will automatically check `/run/secrets/ADMIN_USERNAME` and `/run/secrets/ADMIN_PASSWORD`:
+
+```yaml
+version: '3.8'
+
+services:
+  dcapi:
+    image: dcapi:latest
+    secrets:
+      - ADMIN_USERNAME
+      - ADMIN_PASSWORD
+    volumes:
+      - /run/user/1000/docker.sock:/var/run/docker.sock
+
+secrets:
+  ADMIN_USERNAME:
+    file: ./secrets/username.txt
+  ADMIN_PASSWORD:
+    file: ./secrets/password.txt
+```
+
+#### Method 3: Traditional Environment Variables (Development)
+
+For development or testing, you can still use direct environment variables:
+
+```bash
+export ADMIN_USERNAME=admin
+export ADMIN_PASSWORD=mypassword
+./dcapi
+```
+
+Or in a docker-compose.yml:
+
+```yaml
+services:
+  dcapi:
+    image: dcapi:latest
+    environment:
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=mypassword
+```
+
+### Security Benefits
+
+Using Docker secrets provides several security advantages:
+
+- **No secrets in environment variables** - Environment variables can be exposed through `docker inspect`
+- **File-based secrets** - Secrets are mounted as read-only files in memory
+- **Better access control** - File permissions can be strictly controlled
+- **Audit trail** - Easier to track who has access to secret files
+- **Production best practice** - Aligns with Docker Swarm and Kubernetes patterns
 
 ## How It Works
 
@@ -57,7 +159,7 @@ secrets:
 
 ```bash
 # Auto-generated secrets for Docker Compose
-# This file is managed automatically by composectl
+# This file is managed automatically by dcapi
 # Do not edit manually unless you know what you are doing
 
 POSTGRES_PASSWORD=aB3.x_Y9+zM2-nK8.qW5_pR7+tC1-uD4.eF6_hG0+
@@ -93,7 +195,7 @@ The `prod.env` file will contain both secrets:
 
 ```bash
 # Auto-generated secrets for Docker Compose
-# This file is managed automatically by composectl
+# This file is managed automatically by dcapi
 # Do not edit manually unless you know what you are doing
 
 API_KEY=X9mK.p3_n2+L8-qW5.vR4_zA7+bT1-gH6.yN0_sM2+jF4_

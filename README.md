@@ -67,7 +67,62 @@ This directory is automatically created during installation.
 
 ### Authentication
 
-The application uses Basic Authentication to protect all HTTP endpoints. Credentials are configured in `$HOME/.local/containers/prod.env`:
+The application uses Basic Authentication to protect all HTTP endpoints. Credentials can be configured in multiple ways:
+
+#### Environment Variables and Secrets Loading
+
+ComposeCTL now supports loading environment variables from **two sources simultaneously**:
+
+1. **prod.env file** (`$HOME/.local/containers/prod.env`)
+2. **/run/secrets directory** (Docker Swarm secrets location)
+
+Both sources are merged with **case-insensitive** key matching:
+- Keys are matched case-insensitively (e.g., `ADMIN_USERNAME` matches `admin_username`)
+- If the same key exists in both locations with the **same value**: Warning is logged
+- If the same key exists in both locations with **different values**: Application panics (fatal error)
+
+This ensures configuration consistency and prevents accidental credential mismatches.
+
+See [SECRETS_LOADING.md](docs/SECRETS_LOADING.md) for detailed documentation.
+
+#### Using Docker Secrets (Recommended for Production)
+
+The application supports Docker secrets with the following priority:
+
+1. **Custom file paths** via `ADMIN_USERNAME_FILE` and `ADMIN_PASSWORD_FILE` environment variables
+2. **Default Docker secrets** at `/run/secrets/ADMIN_USERNAME` and `/run/secrets/ADMIN_PASSWORD`
+3. **Direct environment variables** `ADMIN_USERNAME` and `ADMIN_PASSWORD`
+4. **prod.env file** at `$HOME/.local/containers/prod.env`
+5. **Secrets directory** `/run/secrets/` (all files loaded as key-value pairs)
+
+Example docker-compose.yml with secrets:
+
+```yaml
+version: '3.8'
+services:
+  composectl:
+    image: composectl:latest
+    environment:
+      - ADMIN_USERNAME_FILE=/run/secrets/admin_username
+      - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
+    secrets:
+      - admin_username
+      - admin_password
+    volumes:
+      - /run/user/1000/docker.sock:/var/run/docker.sock
+
+secrets:
+  admin_username:
+    file: ./secrets/admin_username.txt
+  admin_password:
+    file: ./secrets/admin_password.txt
+```
+
+See [SECRETS_MANAGEMENT.md](docs/SECRETS_MANAGEMENT.md) for detailed documentation.
+
+#### Using prod.env (Development/Standalone)
+
+For standalone deployment, configure credentials in `$HOME/.local/containers/prod.env`:
 
 ```bash
 ADMIN_USERNAME=admin
@@ -76,6 +131,7 @@ ADMIN_PASSWORD=your_secure_password_here
 
 **Important**: 
 - Set strong passwords in production
+- Use Docker secrets for containerized deployments
 - The `prod.env` file is automatically created with chmod 600 permissions
 - All HTTP endpoints require authentication
 - Use `make setup-auth` to configure credentials interactively

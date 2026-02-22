@@ -103,12 +103,12 @@ import "sync"  // For WaitGroup
 ### Example Streaming Output
 
 ```
-[INFO] Creating network: composectl_traefik with driver: bridge
+[INFO] Creating network: dcapi_traefik with driver: bridge
 [STDOUT] a1b2c3d4e5f6
 [DONE] Command completed successfully
 [INFO] Volume already exists: postgres_data
-[STDOUT] Network composectl_traefik  Creating
-[STDOUT] Network composectl_traefik  Created
+[STDOUT] Network dcapi_traefik  Creating
+[STDOUT] Network dcapi_traefik  Created
 [STDOUT] Volume postgres  Creating
 [STDOUT] Volume postgres  Created
 [STDOUT] Container postgres-postgres-1  Creating
@@ -178,7 +178,7 @@ while (true) {
 
 ### Build
 ```bash
-$ go build -o composectl
+$ go build -o dcapi
 ✅ Build successful!
 ```
 
@@ -287,12 +287,12 @@ Existing clients must be updated to:
 
 ### 1. Build
 ```bash
-go build -o composectl
+go build -o dcapi
 ```
 
 ### 2. Run Server
 ```bash
-./composectl
+./dcapi
 # Server running on http://localhost:8080
 ```
 
@@ -353,14 +353,14 @@ stack.go                        # Main implementation
 
 ### Step 1: Verify Build
 ```bash
-$ go build -o composectl
-$ ls -lh composectl
+$ go build -o dcapi
+$ ls -lh dcapi
 ✅ Binary created successfully
 ```
 
 ### Step 2: Start Server
 ```bash
-$ ./composectl
+$ ./dcapi
 ✅ Server running on http://localhost:8080
 ```
 

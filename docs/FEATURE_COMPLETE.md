@@ -85,7 +85,7 @@ services:
 
 ```bash
 # Auto-generated secrets for Docker Compose
-# This file is managed automatically by composectl
+# This file is managed automatically by dcapi
 # Do not edit manually unless you know what you are doing
 
 API_SECRET=K8pL.mN3_qR7+sT2-uV9.wX1_yZ5+aB6-cD4.eF0_gH2+

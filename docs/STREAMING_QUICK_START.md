@@ -55,7 +55,7 @@ curl -N -X DELETE http://localhost:8080/api/stacks/postgres
 
 ### Using the Web Demo
 
-1. Start the server: `./composectl`
+1. Start the server: `./dcapi`
 2. Open `streaming-demo.html` in your browser
 3. Click the buttons to see real-time streaming in action
 
@@ -75,8 +75,8 @@ All output lines are prefixed with tags:
 ### Example Output
 
 ```
-[STDOUT] Network composectl_traefik  Creating
-[STDOUT] Network composectl_traefik  Created
+[STDOUT] Network dcapi_traefik  Creating
+[STDOUT] Network dcapi_traefik  Created
 [STDOUT] Container postgres-postgres-1  Creating
 [STDOUT] Container postgres-postgres-1  Created
 [STDOUT] Container postgres-postgres-1  Starting
@@ -204,12 +204,12 @@ Use `response.body.getReader()` to read chunks, don't use `response.text()` or `
 
 1. **Build the server:**
    ```bash
-   go build -o composectl
+   go build -o dcapi
    ```
 
 2. **Start the server:**
    ```bash
-   ./composectl
+   ./dcapi
    ```
 
 3. **Test with cURL:**

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the implementation of runtime environment variable support in composectl. The system now prioritizes environment variables available from the runtime environment over those stored in `prod.env`.
+This document describes the implementation of runtime environment variable support in dcapi. The system now prioritizes environment variables available from the runtime environment over those stored in `prod.env`.
 
 ## Changes Made
 
@@ -102,7 +102,7 @@ log.Printf("Warning: Environment variable %s not found in runtime or prod.env", 
 
 ### Use Case 1: Runtime Secrets for CI/CD
 
-**Scenario**: Running composectl in a CI/CD pipeline with secrets injected as environment variables.
+**Scenario**: Running dcapi in a CI/CD pipeline with secrets injected as environment variables.
 
 **Before**:
 - All secrets would be written to `prod.env` file
@@ -119,8 +119,8 @@ log.Printf("Warning: Environment variable %s not found in runtime or prod.env", 
 export POSTGRES_PASSWORD="ci-secret-123"
 export API_KEY="github-actions-secret"
 
-# Run composectl
-./composectl
+# Run dcapi
+./dcapi
 
 # Result: POSTGRES_PASSWORD and API_KEY are NOT added to prod.env
 # They are used directly from environment variables
@@ -128,7 +128,7 @@ export API_KEY="github-actions-secret"
 
 ### Use Case 2: Docker Container Deployment
 
-**Scenario**: Running composectl as a Docker container with secrets passed via environment variables.
+**Scenario**: Running dcapi as a Docker container with secrets passed via environment variables.
 
 **Before**:
 - Container would create `prod.env` with duplicate secrets
@@ -143,7 +143,7 @@ export API_KEY="github-actions-secret"
 ```bash
 docker run -e DATABASE_PASSWORD=secret123 \
            -e PUBLIC_DOMAIN=example.com \
-           composectl:latest
+           dcapi:latest
 
 # Result: DATABASE_PASSWORD and PUBLIC_DOMAIN from container environment
 # Other missing variables generated in prod.env
@@ -198,12 +198,12 @@ env:
 # Development
 export PUBLIC_DOMAIN="localhost"
 export DEBUG_MODE="true"
-./composectl
+./dcapi
 
 # Production
 export PUBLIC_DOMAIN="example.com"
 export DEBUG_MODE="false"
-./composectl
+./dcapi
 
 # Result: Environment-specific values from runtime
 # Common generated secrets in prod.env
@@ -211,7 +211,7 @@ export DEBUG_MODE="false"
 
 ## Priority Order
 
-When resolving environment variables, composectl now follows this priority:
+When resolving environment variables, dcapi now follows this priority:
 
 1. **Runtime Environment** (`os.Getenv()`) - HIGHEST PRIORITY
 2. **prod.env file** - Fallback
@@ -253,14 +253,14 @@ Generated new secret 'RANDOM_SECRET' in prod.env
 
 To test the new functionality:
 
-1. Set an environment variable before running composectl:
+1. Set an environment variable before running dcapi:
    ```bash
    export TEST_VAR="from_runtime"
    ```
 
 2. Create a compose file that references `${TEST_VAR}`
 
-3. Run composectl and observe logs:
+3. Run dcapi and observe logs:
    - Should see: "Environment variable 'TEST_VAR' is available from runtime environment, skipping prod.env"
    - `TEST_VAR` should NOT appear in `prod.env`
    - YAML should be processed with the runtime value
@@ -277,7 +277,7 @@ No migration needed! The changes are transparent to existing deployments.
 
 ## Summary
 
-This implementation makes composectl more flexible and secure by:
+This implementation makes dcapi more flexible and secure by:
 - ✅ Supporting runtime environment variables
 - ✅ Avoiding duplicate secret storage
 - ✅ Following container and cloud-native best practices

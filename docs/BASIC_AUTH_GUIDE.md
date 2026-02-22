@@ -25,10 +25,10 @@ make setup-auth
 
 ```bash
 # Build the application
-go build -o composectl
+go build -o dcapi
 
 # Run directly
-./composectl
+./dcapi
 
 # Or install as a systemd service
 make install
@@ -90,9 +90,9 @@ In production, use a reverse proxy with HTTPS (Traefik, Nginx, Caddy):
 # Example Traefik configuration
 labels:
   - "traefik.enable=true"
-  - "traefik.http.routers.composectl.rule=Host(`composectl.example.com`)"
-  - "traefik.http.routers.composectl.entrypoints=websecure"
-  - "traefik.http.routers.composectl.tls.certresolver=letsencrypt"
+  - "traefik.http.routers.dcapi.rule=Host(`dcapi.example.com`)"
+  - "traefik.http.routers.dcapi.entrypoints=websecure"
+  - "traefik.http.routers.dcapi.tls.certresolver=letsencrypt"
 ```
 
 ### 4. Network Access Control
@@ -199,7 +199,7 @@ Credentials can also be set via environment variables (overrides prod.env):
 ```bash
 export ADMIN_USERNAME=admin
 export ADMIN_PASSWORD=secret
-./composectl
+./dcapi
 ```
 
 ### Systemd Service with Environment
@@ -207,7 +207,7 @@ export ADMIN_PASSWORD=secret
 Edit the service file to include environment variables:
 
 ```bash
-# Edit ~/.config/systemd/user/composectl.service
+# Edit ~/.config/systemd/user/dcapi.service
 [Service]
 Environment="ADMIN_USERNAME=admin"
 Environment="ADMIN_PASSWORD=secret"

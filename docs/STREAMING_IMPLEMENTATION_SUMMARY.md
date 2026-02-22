@@ -3,16 +3,16 @@
 ## Changes Made
 
 ### 1. Modified Files
-- `/home/leochl/workspace/composectl-go/stack.go`
+- `/home/leochl/workspace/dcapi-go/stack.go`
   - Added `sync` package import for WaitGroup
   - Added `streamCommandOutput()` helper function
   - Modified `HandleDockerComposeFile()` to stream docker compose up/down output
   - Modified `HandleDeleteStack()` to stream docker compose down output
 
 ### 2. New Files Created
-- `/home/leochl/workspace/composectl-go/docs/CHUNKED_STREAMING.md` - Complete documentation
-- `/home/leochl/workspace/composectl-go/test-streaming.sh` - Testing script
-- `/home/leochl/workspace/composectl-go/streaming-demo.html` - Interactive web demo
+- `/home/leochl/workspace/dcapi-go/docs/CHUNKED_STREAMING.md` - Complete documentation
+- `/home/leochl/workspace/dcapi-go/test-streaming.sh` - Testing script
+- `/home/leochl/workspace/dcapi-go/streaming-demo.html` - Interactive web demo
 
 ## Key Features
 
@@ -76,14 +76,14 @@ while (true) {
 ### Quick Test
 ```bash
 # Make sure server is running
-./composectl-test
+./dcapi-test
 
 # In another terminal
 ./test-streaming.sh
 ```
 
 ### Interactive Demo
-1. Start the server: `./composectl-test`
+1. Start the server: `./dcapi-test`
 2. Open `streaming-demo.html` in a browser
 3. Click the buttons to see real-time streaming
 
@@ -92,12 +92,12 @@ while (true) {
 ### Example Output
 
 ```
-[INFO] Creating network: composectl_traefik with driver: bridge
+[INFO] Creating network: dcapi_traefik with driver: bridge
 [STDOUT] a1b2c3d4e5f6
 [DONE] Command completed successfully
 [INFO] Volume already exists: postgres_data
-[STDOUT] Network composectl_traefik  Creating
-[STDOUT] Network composectl_traefik  Created
+[STDOUT] Network dcapi_traefik  Creating
+[STDOUT] Network dcapi_traefik  Created
 [STDOUT] Container postgres-postgres-1  Creating
 [STDOUT] Container postgres-postgres-1  Created
 [STDOUT] Container postgres-postgres-1  Starting
@@ -148,8 +148,8 @@ Each line is immediately flushed using the `http.Flusher` interface to ensure re
 
 To use the new streaming functionality:
 
-1. Build: `go build -o composectl`
-2. Run: `./composectl`
+1. Build: `go build -o dcapi`
+2. Run: `./dcapi`
 3. Test: `./test-streaming.sh` or open `streaming-demo.html`
 4. Update client code to handle streaming responses
 

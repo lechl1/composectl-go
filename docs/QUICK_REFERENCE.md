@@ -47,7 +47,7 @@ secrets:
 ### Generated prod.env
 ```bash
 # Auto-generated secrets for Docker Compose
-# This file is managed automatically by composectl
+# This file is managed automatically by dcapi
 # Do not edit manually unless you know what you are doing
 
 DB_PASSWORD=jK7.mN2_pQ5+rS8-tU1.vW4_xY6+zA9-bC3.dE0_fG2+
