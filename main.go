@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 )
@@ -17,7 +18,10 @@ func main() {
 	http.HandleFunc("/api/enrich/", BasicAuthMiddleware(HandleEnrichYAML))
 	http.HandleFunc("/", BasicAuthMiddleware(HandleRoot))
 
-	log.Println("Server running on http://localhost:8080")
+	port := GetPort()
+	addr := fmt.Sprintf(":%s", port)
+
+	log.Printf("Server running on http://localhost:%s", port)
 	log.Println("Basic Authentication enabled - credentials from prod.env (ADMIN_USERNAME, ADMIN_PASSWORD)")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Fatal(http.ListenAndServe(addr, nil))
 }

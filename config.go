@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 var (
@@ -60,4 +61,58 @@ func GetStackPath(stackName string, effective bool) string {
 		suffix = ".effective.yml"
 	}
 	return filepath.Join(StacksDir, stackName+suffix)
+}
+
+// GetPort retrieves the PORT configuration with the following priority:
+// 1. Check PORT_FILE env var (Docker secrets pattern)
+// 2. Check default Docker secrets location (/run/secrets/PORT or /run/secrets/port - case insensitive)
+// 3. Check PORT env var
+// 4. Check prod.env file (case insensitive)
+// 5. Default to "8080"
+func GetPort() string {
+	// Try to read from file specified in PORT_FILE env var
+	if portFile := os.Getenv("PORT_FILE"); portFile != "" {
+		if content, err := readSecretFile(portFile); err == nil {
+			log.Printf("Loaded PORT from file: %s", portFile)
+			return content
+		} else {
+			log.Printf("Warning: Failed to read PORT_FILE (%s): %v", portFile, err)
+		}
+	}
+
+	// Try default Docker secrets location (case insensitive)
+	// Try both uppercase and lowercase variants
+	secretPaths := []string{
+		"/run/secrets/PORT",
+		"/run/secrets/port",
+		"/run/secrets/Port",
+	}
+	for _, secretPath := range secretPaths {
+		if content, err := readSecretFile(secretPath); err == nil {
+			log.Printf("Loaded PORT from Docker secrets: %s", secretPath)
+			return content
+		}
+	}
+
+	// Fall back to direct environment variable
+	if port := os.Getenv("PORT"); port != "" {
+		return port
+	}
+
+	// If PORT is still not set, load from prod.env (case insensitive)
+	envVars, err := readProdEnv(ProdEnvPath)
+	if err != nil {
+		log.Printf("Warning: Failed to read prod.env for PORT: %v", err)
+	} else {
+		// Try case-insensitive lookup
+		for key, value := range envVars {
+			if strings.ToLower(key) == "port" {
+				log.Printf("Loaded PORT from prod.env: %s", key)
+				return value
+			}
+		}
+	}
+
+	// Default to 8080
+	return "8080"
 }
