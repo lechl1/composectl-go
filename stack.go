@@ -1634,86 +1634,83 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 		}
 		log.Printf("Successfully updated stack: %s (original: %s, effective: %s)", stackName, originalFilePath, effectiveFilePath)
 
-		if !dryRun {
-			var cmd *exec.Cmd
-			var actionName string
+		var cmd *exec.Cmd
+		var actionName string
 
-			switch action {
-			case ComposeActionNone:
-				// No action to perform
-			case ComposeActionUp, ComposeActionDown:
-				// Parse the effective compose file to get networks and volumes
-				var effectiveCompose ComposeFile
-				if err := yaml.Unmarshal(enrichedSanitizedYAML, &effectiveCompose); err != nil {
-					log.Printf("Error parsing effective compose file for stack %s: %v", stackName, err)
-					http.Error(w, fmt.Sprintf("Failed to parse effective compose file: %v", err), http.StatusInternalServerError)
-					return
-				}
-
-				// Set up streaming headers before creating networks/volumes
-				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-				w.Header().Set("Transfer-Encoding", "chunked")
-				w.Header().Set("X-Content-Type-Options", "nosniff")
-				w.WriteHeader(http.StatusOK)
-
-				// Create missing networks and volumes before docker compose up/down
-				// Pass ResponseWriter to stream output
-				if err := ensureNetworksExist(&effectiveCompose, w); err != nil {
-					log.Printf("Error ensuring networks exist for stack %s: %v", stackName, err)
-					fmt.Fprintf(w, "[ERROR] Failed to create networks: %v\n", err)
-					if flusher, ok := w.(http.Flusher); ok {
-						flusher.Flush()
-					}
-					return
-				}
-
-				if err := ensureVolumesExist(&effectiveCompose, w); err != nil {
-					log.Printf("Error ensuring volumes exist for stack %s: %v", stackName, err)
-					fmt.Fprintf(w, "[ERROR] Failed to create volumes: %v\n", err)
-					if flusher, ok := w.(http.Flusher); ok {
-						flusher.Flush()
-					}
-					return
-				}
-
-				// Replace environment variables in the effective YAML content
-				yamlContent, err := replaceEnvVarsInYAML(effectiveFilePath)
-				if err != nil {
-					log.Printf("Error replacing environment variables in compose file: %v", err)
-					fmt.Fprintf(w, "[ERROR] Failed to process compose file: %v\n", err)
-					if flusher, ok := w.(http.Flusher); ok {
-						flusher.Flush()
-					}
-					return
-				}
-
-				if action == ComposeActionUp {
-					actionName = "up"
-					cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "up", "-d", "--wait")
-				} else {
-					actionName = "down"
-					cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down")
-				}
-
-				// Set stdin to the processed YAML content
-				cmd.Stdin = strings.NewReader(yamlContent)
-			}
-
-			if cmd != nil {
-				log.Printf("Executing docker compose %s for stack: %s", actionName, stackName)
-
-				// Stream the output (headers already set above)
-				if err := streamCommandOutput(w, cmd); err != nil {
-					log.Printf("Error executing docker compose %s for stack %s: %v", actionName, stackName, err)
-					// Error already written to response stream
-					return
-				}
-				log.Printf("Successfully executed docker compose %s for stack %s", actionName, stackName)
-				// Response already sent via streaming, so return early
+		switch action {
+		case ComposeActionNone:
+			// No action to perform
+		case ComposeActionUp, ComposeActionDown:
+			// Parse the effective compose file to get networks and volumes
+			var effectiveCompose ComposeFile
+			if err := yaml.Unmarshal(enrichedSanitizedYAML, &effectiveCompose); err != nil {
+				log.Printf("Error parsing effective compose file for stack %s: %v", stackName, err)
+				http.Error(w, fmt.Sprintf("Failed to parse effective compose file: %v", err), http.StatusInternalServerError)
 				return
 			}
+
+			// Set up streaming headers before creating networks/volumes
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("Transfer-Encoding", "chunked")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.WriteHeader(http.StatusOK)
+
+			// Create missing networks and volumes before docker compose up/down
+			// Pass ResponseWriter to stream output
+			if err := ensureNetworksExist(&effectiveCompose, w); err != nil {
+				log.Printf("Error ensuring networks exist for stack %s: %v", stackName, err)
+				fmt.Fprintf(w, "[ERROR] Failed to create networks: %v\n", err)
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				return
+			}
+
+			if err := ensureVolumesExist(&effectiveCompose, w); err != nil {
+				log.Printf("Error ensuring volumes exist for stack %s: %v", stackName, err)
+				fmt.Fprintf(w, "[ERROR] Failed to create volumes: %v\n", err)
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				return
+			}
+
+			// Replace environment variables in the effective YAML content
+			yamlContent, err := replaceEnvVarsInYAML(effectiveFilePath)
+			if err != nil {
+				log.Printf("Error replacing environment variables in compose file: %v", err)
+				fmt.Fprintf(w, "[ERROR] Failed to process compose file: %v\n", err)
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				return
+			}
+
+			if action == ComposeActionUp {
+				actionName = "up"
+				cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "up", "-d", "--wait", "--remove-orphans")
+			} else {
+				actionName = "down"
+				cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down")
+			}
+
+			// Set stdin to the processed YAML content
+			cmd.Stdin = strings.NewReader(yamlContent)
 		}
 
+		if cmd != nil {
+			log.Printf("Executing docker compose %s for stack: %s", actionName, stackName)
+
+			// Stream the output (headers already set above)
+			if err := streamCommandOutput(w, cmd); err != nil {
+				log.Printf("Error executing docker compose %s for stack %s: %v", actionName, stackName, err)
+				// Error already written to response stream
+				return
+			}
+			log.Printf("Successfully executed docker compose %s for stack %s", actionName, stackName)
+			// Response already sent via streaming, so return early
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/yaml")
 	w.WriteHeader(http.StatusOK)
