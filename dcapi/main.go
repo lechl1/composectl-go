@@ -31,7 +31,6 @@ func main() {
 	http.HandleFunc("/thumbnail/", BasicAuthMiddleware(HandleThumbnail))
 	http.HandleFunc("/api/containers/", BasicAuthMiddleware(handleContainerAPI))
 	http.HandleFunc("/api/stacks/", BasicAuthMiddleware(handleStackAPI))
-	http.HandleFunc("/api/enrich/", BasicAuthMiddleware(HandleEnrichYAML))
 	http.HandleFunc("/", BasicAuthMiddleware(HandleRoot))
 
 	port := GetPort(os.Args)

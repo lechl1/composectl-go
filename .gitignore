@@ -1,8 +1,4 @@
 .idea
-dcapi
-dcctl
-dctl
-dapi
 stacks
 thumbnails
 *.log

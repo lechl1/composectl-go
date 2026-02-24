@@ -13,7 +13,6 @@ import (
 	"strings"
 )
 
-
 // matchResult contains the matched template path and extracted parameters
 type matchResult struct {
 	templatePath string
@@ -118,7 +117,6 @@ func HandleRoot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
-
 
 // matchRoute tries to match a URL path to a template, handling dynamic segments like [stack]
 func matchRoute(urlPath string) (*matchResult, error) {
