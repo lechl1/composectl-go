@@ -13,6 +13,9 @@ import (
 )
 
 func main() {
+	// Initialize paths first (respects --stacks-dir and --env-path arguments)
+	InitPaths(os.Args)
+
 	host := flag.String("host", "", "Server host (default: http://localhost:8882)")
 	user := flag.String("user", "", "Username")
 	password := flag.String("password", "", "Password")

@@ -90,9 +90,9 @@ In production, use a reverse proxy with HTTPS (Traefik, Nginx, Caddy):
 # Example Traefik configuration
 labels:
   - "traefik.enable=true"
-  - "traefik.http.routers.dcapi.rule=Host(`dcapi.example.com`)"
-  - "traefik.http.routers.dcapi.entrypoints=websecure"
-  - "traefik.http.routers.dcapi.tls.certresolver=letsencrypt"
+  - "traefik.http.routers.rule=Host(`example.com`)"
+  - "traefik.http.routers.entrypoints=websecure"
+  - "traefik.http.routers.tls.certresolver=letsencrypt"
 ```
 
 ### 4. Network Access Control
@@ -207,7 +207,7 @@ export ADMIN_PASSWORD=secret
 Edit the service file to include environment variables:
 
 ```bash
-# Edit ~/.config/systemd/user/dcapi.service
+# Edit ~/.config/systemd/user/service
 [Service]
 Environment="ADMIN_USERNAME=admin"
 Environment="ADMIN_PASSWORD=secret"

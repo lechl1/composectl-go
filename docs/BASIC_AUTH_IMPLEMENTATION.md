@@ -2,7 +2,7 @@
 
 ## What Was Implemented
 
-Basic Authentication has been added to all HTTP endpoints in dc. Credentials are stored in `prod.env` as `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
+Basic Authentication has been added to all HTTP endpoints in  Credentials are stored in `prod.env` as `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
 
 ## Files Created/Modified
 
@@ -227,7 +227,7 @@ Regular string comparison (`==`) can be vulnerable to timing attacks where an at
 5. **Monitor Access**
    ```bash
    # Check logs for failed auth attempts
-   journalctl --user -u dcapi.service | grep "401"
+   journalctl --user -u service | grep "401"
    ```
 
 ## Troubleshooting

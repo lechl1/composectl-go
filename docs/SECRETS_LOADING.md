@@ -117,7 +117,7 @@ secrets:
     external: true
 ```
 
-Secrets are automatically mounted to `/run/secrets/` and loaded by dc.
+Secrets are automatically mounted to `/run/secrets/` and loaded by 
 
 ## Security Features
 

@@ -174,7 +174,7 @@ Ensure both `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set.
 
 Check if the service is enabled:
 ```bash
-systemctl --user is-enabled dcapi.service
+systemctl --user is-enabled service
 ```
 
 Enable if needed:

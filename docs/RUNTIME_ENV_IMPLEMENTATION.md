@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the implementation of runtime environment variable support in dcapi. The system now prioritizes environment variables available from the runtime environment over those stored in `prod.env`.
+This document describes the implementation of runtime environment variable support in  The system now prioritizes environment variables available from the runtime environment over those stored in `prod.env`.
 
 ## Changes Made
 

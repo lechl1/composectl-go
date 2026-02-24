@@ -265,7 +265,7 @@ make restart
 
 Check if the service is enabled:
 ```bash
-systemctl --user is-enabled dc.service
+systemctl --user is-enabled service
 ```
 
 Enable if needed:

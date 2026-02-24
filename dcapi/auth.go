@@ -1,16 +1,17 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"fmt"
+	"github.com/golang-jwt/jwt/v5"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/golang-jwt/jwt/v5"
 )
 
 // SessionStore holds active sessions in memory
@@ -91,25 +92,6 @@ func readSecretFile(path string) (string, error) {
 	return strings.TrimSpace(string(content)), nil
 }
 
-// getAdminCredentials retrieves admin credentials using the unified config system
-func getAdminCredentials(args []string) (username, password string) {
-	username = GetAdminUsername(args)
-	password = GetAdminPassword(args)
-	return username, password
-}
-
-// LoginRequest represents the login request payload
-type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-// LoginResponse represents the login response payload
-type LoginResponse struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
-
 // HandleLogin handles the /login endpoint - accepts Basic Auth only
 func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Only accept POST requests
@@ -127,11 +109,13 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get admin credentials
-	adminUsername, adminPassword, err := GetAdminCredentials(os.Args)
-	if err != nil {
-		log.Printf("Error retrieving admin credentials: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
+	adminUsername := getConfig("admin_username", "admin")
+	if username == "" {
+		fmt.Println("Warning: admin_username not set. Using default 'admin'")
+	}
+	adminPassword := getConfig("admin_password", "Admin_123")
+	if password == "" {
+		fmt.Fprintln(os.Stderr, "Warning: admin_password not set. Using default 'Admin_123'")
 	}
 
 	// Validate credentials using constant-time comparison
@@ -210,9 +194,7 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 
 	// Remove session
 	sessionStore.RemoveSession(tokenString)
-
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintln(w, "Logged out successfully")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // validateBearerToken validates a JWT bearer token and renews the session
@@ -253,16 +235,15 @@ func validateBearerToken(tokenString string) (*Claims, error) {
 	return claims, nil
 }
 
-// BasicAuthMiddleware wraps an http.HandlerFunc with Bearer Token authentication only
-func BasicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func JwtAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Only accept Bearer token (no Basic Auth fallback)
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
 			log.Printf("Missing or invalid Authorization header")
-			w.Header().Set("WWW-Authenticate", `Bearer realm="dc - Restricted Access"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="dcapi"`)
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte("401 Unauthorized - Bearer token required\n"))
+			w.Write([]byte("401 Unauthorized\n"))
 			return
 		}
 
@@ -272,20 +253,13 @@ func BasicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		_, err := validateBearerToken(tokenString)
 		if err != nil {
 			log.Printf("Bearer token validation failed: %v", err)
-			w.Header().Set("WWW-Authenticate", `Bearer realm="dc - Restricted Access"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="dcapi"`)
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte("401 Unauthorized - Invalid or expired token\n"))
+			w.Write([]byte("401 Unauthorized\n"))
 			return
 		}
 		next(w, r)
 	}
-}
-
-// unauthorizedResponse sends a 401 Unauthorized response with WWW-Authenticate header
-func unauthorizedResponse(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", `Basic realm="dc - Restricted Access"`)
-	w.WriteHeader(http.StatusUnauthorized)
-	w.Write([]byte("401 Unauthorized\n"))
 }
 
 func SessionCleanup() {
@@ -296,4 +270,135 @@ func SessionCleanup() {
 		log.Println("Cleaning up expired sessions...")
 		sessionStore.CleanupExpiredSessions()
 	}
+}
+
+func getConfig(key string, defaultValue string) string {
+	keyLower := strings.ToLower(key)
+	keyUpper := strings.ToUpper(key)
+	// Create title case manually (first char upper, rest lower)
+	keyTitle := ""
+	if len(keyLower) > 0 {
+		keyTitle = strings.ToUpper(string(keyLower[0])) + keyLower[1:]
+	}
+
+	// Check program arguments first
+	args := os.Args[1:] // Skip program name
+	for i, arg := range args {
+		// Replace underscores with dashes for command-line flag names
+		keyFlag := strings.ReplaceAll(keyLower, "_", "-")
+		argFlag := "-" + keyFlag
+		argFlagDouble := "--" + keyFlag
+
+		if (arg == argFlag || arg == argFlagDouble) && i+1 < len(args) {
+			log.Printf("Loaded %s from program arguments: %s", keyUpper, args[i+1])
+			return args[i+1]
+		}
+		// Handle --key=value format
+		if strings.HasPrefix(arg, argFlagDouble+"=") {
+			value := strings.TrimPrefix(arg, argFlagDouble+"=")
+			log.Printf("Loaded %s from program arguments: %s", keyUpper, value)
+			return value
+		}
+		if strings.HasPrefix(arg, argFlag+"=") {
+			value := strings.TrimPrefix(arg, argFlag+"=")
+			log.Printf("Loaded %s from program arguments: %s", keyUpper, value)
+			return value
+		}
+	}
+
+	// Try to read from file specified in KEY_FILE env var
+	fileEnvVar := keyUpper + "_FILE"
+	if configFile := os.Getenv(fileEnvVar); configFile != "" {
+		if content, err := readSecretFile(configFile); err == nil {
+			log.Printf("Loaded %s from file: %s", keyUpper, configFile)
+			return content
+		} else {
+			log.Printf("Warning: Failed to read %s (%s): %v", fileEnvVar, configFile, err)
+		}
+	}
+
+	// Check direct environment variable
+	if value := os.Getenv(keyUpper); value != "" {
+		return value
+	}
+
+	// Try default Docker secrets location (case insensitive)
+	secretPaths := []string{
+		"/run/secrets/" + keyUpper,
+		"/run/secrets/" + keyLower,
+		"/run/secrets/" + keyTitle,
+	}
+	for _, secretPath := range secretPaths {
+		if content, err := readSecretFile(secretPath); err == nil {
+			log.Printf("Loaded %s from Docker secrets: %s", keyUpper, secretPath)
+			return content
+		}
+	}
+
+	// Return default value
+	return defaultValue
+}
+
+// GetSecretKey retrieves the SECRET_KEY configuration with the following priority:
+// 1. Check program arguments for -secret-key or --secret-key flag
+// 2. Check SECRET_KEY_FILE env var (Docker secrets pattern)
+// 3. Check SECRET_KEY env var
+// 4. Check prod.env file (case insensitive)
+// 5. Check default Docker secrets location (/run/secrets/SECRET_KEY - case insensitive)
+// 6. Generate and save a new random secret key to prod.env
+func GetSecretKey(args []string) string {
+	secretKey := getConfig("secret_key", "")
+
+	// If no secret key found, generate one and save it to prod.env
+	if secretKey == "" {
+		var err error
+		secretKey, err = generateAndSaveSecretKey()
+		if err != nil {
+			log.Fatalf("Failed to generate secret key: %v", err)
+		}
+	}
+
+	return secretKey
+}
+
+// generateAndSaveSecretKey generates a new random secret key and saves it to prod.env
+func generateAndSaveSecretKey() (string, error) {
+	secretKey := getConfig("auth_secret_key", "")
+	if secretKey != "" {
+		return secretKey, nil
+	}
+	// Generate a 64-character random secret key
+	secretKey, err := generateURLSafePassword(64)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate secret key: %w", err)
+	}
+
+	fmt.Errorf("Using generated secret key. %s", secretKey)
+	return secretKey, nil
+}
+
+// generateURLSafePassword generates a cryptographically secure URL-safe random password
+func generateURLSafePassword(length int) (string, error) {
+	// Generate random bytes (we need more bytes than the final length due to base64 encoding)
+	numBytes := (length * 6) / 8
+	if numBytes < length {
+		numBytes = length
+	}
+
+	randomBytes := make([]byte, numBytes)
+	_, err := rand.Read(randomBytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate random bytes: %w", err)
+	}
+
+	// Encode to base64 URL-safe format and remove padding
+	password := base64.URLEncoding.EncodeToString(randomBytes)
+	password = strings.TrimRight(password, "=")
+
+	// Truncate to desired length
+	if len(password) > length {
+		password = password[:length]
+	}
+
+	return password, nil
 }

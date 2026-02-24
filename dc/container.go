@@ -244,20 +244,6 @@ type EndpointIPAMConfig struct {
 	IPv6Address string `json:"ipv6address"`
 }
 
-// handleContainerAPI routes container API requests to appropriate handlers
-func handleContainerAPI(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	if strings.HasSuffix(path, "/stop") {
-		HandleStopContainer(w, r)
-	} else if strings.HasSuffix(path, "/start") {
-		HandleStartContainer(w, r)
-	} else if r.Method == http.MethodDelete {
-		HandleDeleteContainer(w, r)
-	} else {
-		http.Error(w, "Not found", http.StatusNotFound)
-	}
-}
-
 // HandleStopContainer handles POST /api/containers/{id}/stop
 // Stops a Docker container by ID
 func HandleStopContainer(w http.ResponseWriter, r *http.Request) {
