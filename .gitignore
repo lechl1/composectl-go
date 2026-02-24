@@ -4,4 +4,7 @@ thumbnails
 *.log
 prod.env
 /dc/dc
+/dc/dcapi
+/dcapi/dc
 /dcapi/dcapi
+build
