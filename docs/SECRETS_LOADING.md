@@ -2,7 +2,7 @@
 
 ## Overview
 
-ComposeCTL now supports loading environment variables from two sources:
+dc now supports loading environment variables from two sources:
 1. **prod.env file** (located at `$HOME/.local/containers/prod.env`)
 2. **/run/secrets directory** (Docker Swarm secrets location)
 
@@ -102,8 +102,8 @@ This feature integrates seamlessly with Docker Swarm secrets:
 version: '3.8'
 
 services:
-  composectl:
-    image: composectl:latest
+  dc:
+    image: dc:latest
     secrets:
       - db_password
       - api_key
@@ -117,7 +117,7 @@ secrets:
     external: true
 ```
 
-Secrets are automatically mounted to `/run/secrets/` and loaded by ComposeCTL.
+Secrets are automatically mounted to `/run/secrets/` and loaded by dc.
 
 ## Security Features
 

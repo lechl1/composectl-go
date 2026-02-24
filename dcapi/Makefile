@@ -1,8 +1,8 @@
 .PHONY: build install uninstall start stop restart status enable disable clean test help setup-auth
 
 # Binary and service names
-BINARY_NAME=composectl
-SERVICE_NAME=composectl
+BINARY_NAME=dc
+SERVICE_NAME=dc
 
 # Installation paths
 INSTALL_DIR=$(HOME)/.local/bin
@@ -47,7 +47,7 @@ install: build ## Install the application and set up systemd user service
 	# Initialize prod.env if it doesn't exist
 	@if [ ! -f $(PROD_ENV) ]; then \
 		echo "# Auto-generated secrets for Docker Compose" > $(PROD_ENV); \
-		echo "# This file is managed automatically by composectl" >> $(PROD_ENV); \
+		echo "# This file is managed automatically by dc" >> $(PROD_ENV); \
 		echo "# Do not edit manually unless you know what you are doing" >> $(PROD_ENV); \
 		echo "" >> $(PROD_ENV); \
 		chmod 600 $(PROD_ENV); \
@@ -87,7 +87,7 @@ install: build ## Install the application and set up systemd user service
 	# Create systemd user service file
 	@echo "Creating systemd user service..."
 	@echo "[Unit]" > $(SERVICE_FILE)
-	@echo "Description=ComposeCTL - Docker Compose Management Service" >> $(SERVICE_FILE)
+	@echo "Description=dc - Docker Compose Management Service" >> $(SERVICE_FILE)
 	@echo "After=network.target docker.service" >> $(SERVICE_FILE)
 	@echo "Wants=docker.service" >> $(SERVICE_FILE)
 	@echo "" >> $(SERVICE_FILE)
@@ -184,7 +184,7 @@ setup-auth: ## Set up authentication credentials in prod.env
 	@mkdir -p $(WORKING_DIR)
 	@if [ ! -f $(PROD_ENV) ]; then \
 		echo "# Auto-generated secrets for Docker Compose" > $(PROD_ENV); \
-		echo "# This file is managed automatically by composectl" >> $(PROD_ENV); \
+		echo "# This file is managed automatically by dc" >> $(PROD_ENV); \
 		echo "# Do not edit manually unless you know what you are doing" >> $(PROD_ENV); \
 		echo "" >> $(PROD_ENV); \
 		chmod 600 $(PROD_ENV); \

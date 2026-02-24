@@ -159,7 +159,7 @@ Implemented dual-source environment variable loading that reads from both `prod.
 
 ### Build Verification
 ```bash
-cd /home/leochl/workspace/composectl-go
+cd /home/leochl/workspace/dc-go
 go build
 # Result: Success, no errors
 ```
@@ -241,20 +241,20 @@ This implementation satisfies the requirement:
 
 ## Files Modified
 
-1. `/home/leochl/workspace/composectl-go/stack.go`
+1. `/home/leochl/workspace/dc-go/stack.go`
    - Added: `readProdEnvWithSecrets()`, `readEnvFile()`, `readSecretsDir()`, `sanitizeForLog()`
    - Modified: `readProdEnv()`
    - Lines: 2239-2395
 
-2. `/home/leochl/workspace/composectl-go/README.md`
+2. `/home/leochl/workspace/dc-go/README.md`
    - Updated authentication section
    - Added dual-source environment loading documentation
 
 ## Documentation Created
 
-1. `/home/leochl/workspace/composectl-go/docs/SECRETS_LOADING.md`
-2. `/home/leochl/workspace/composectl-go/docs/ENV_SECRETS_QUICK_REF.md`
-3. `/home/leochl/workspace/composectl-go/docs/ENV_SECRETS_IMPLEMENTATION_SUMMARY.md` (this file)
+1. `/home/leochl/workspace/dc-go/docs/SECRETS_LOADING.md`
+2. `/home/leochl/workspace/dc-go/docs/ENV_SECRETS_QUICK_REF.md`
+3. `/home/leochl/workspace/dc-go/docs/ENV_SECRETS_IMPLEMENTATION_SUMMARY.md` (this file)
 
 ## Verification Checklist
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Implemented support for Docker secrets in ComposeCTL authentication, allowing secure credential management following Docker and Kubernetes best practices.
+Implemented support for Docker secrets in dc authentication, allowing secure credential management following Docker and Kubernetes best practices.
 
 ## Changes Made
 
@@ -121,7 +121,7 @@ secrets:
   - ADMIN_PASSWORD
 ```
 
-No environment variables needed! ComposeCTL automatically checks `/run/secrets/ADMIN_USERNAME` and `/run/secrets/ADMIN_PASSWORD`.
+No environment variables needed! dc automatically checks `/run/secrets/ADMIN_USERNAME` and `/run/secrets/ADMIN_PASSWORD`.
 
 ### Pattern 3: Direct Environment Variables (Development)
 
@@ -215,5 +215,5 @@ This implementation follows:
 
 ## Summary
 
-The implementation provides a production-ready, secure way to manage authentication credentials in ComposeCTL using Docker secrets, while maintaining backward compatibility with existing deployment methods. The code is well-documented, tested, and follows security best practices.
+The implementation provides a production-ready, secure way to manage authentication credentials in dc using Docker secrets, while maintaining backward compatibility with existing deployment methods. The code is well-documented, tested, and follows security best practices.
 

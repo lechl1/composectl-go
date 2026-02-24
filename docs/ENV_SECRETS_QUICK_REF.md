@@ -2,7 +2,7 @@
 
 ## Overview
 
-ComposeCTL loads environment variables from **two sources simultaneously**:
+dc loads environment variables from **two sources simultaneously**:
 - **prod.env** file
 - **/run/secrets** directory
 
@@ -73,8 +73,8 @@ KEY2=value2
 ```yaml
 version: '3.8'
 services:
-  composectl:
-    image: composectl:latest
+  dc:
+    image: dc:latest
     secrets:
       - db_password
       - api_key

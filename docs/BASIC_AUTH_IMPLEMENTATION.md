@@ -2,7 +2,7 @@
 
 ## What Was Implemented
 
-Basic Authentication has been added to all HTTP endpoints in ComposeCTL. Credentials are stored in `prod.env` as `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
+Basic Authentication has been added to all HTTP endpoints in dc. Credentials are stored in `prod.env` as `ADMIN_USERNAME` and `ADMIN_PASSWORD`.
 
 ## Files Created/Modified
 

@@ -1,4 +1,4 @@
-# ComposeCTL - Docker Compose Management Service
+# dc - Docker Compose Management Service
 
 A web-based management interface for Docker Compose stacks with real-time monitoring and control.
 

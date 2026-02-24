@@ -1,6 +1,6 @@
 # Authentication with Docker Secrets - Quick Start
 
-This guide shows you how to use Docker secrets for ComposeCTL authentication.
+This guide shows you how to use Docker secrets for dc authentication.
 
 ## Why Use Docker Secrets?
 
@@ -71,7 +71,7 @@ open http://localhost:8080
 
 ## How It Works
 
-ComposeCTL checks for credentials in this priority order:
+dc checks for credentials in this priority order:
 
 1. **`ADMIN_USERNAME_FILE` and `ADMIN_PASSWORD_FILE`** - Environment variables pointing to file paths
 2. **Default Docker secrets** - `/run/secrets/ADMIN_USERNAME` and `/run/secrets/ADMIN_PASSWORD`
@@ -81,7 +81,7 @@ ComposeCTL checks for credentials in this priority order:
 When you set `ADMIN_USERNAME_FILE=/run/secrets/admin_username`, Docker Compose:
 1. Reads `secrets/admin_username.txt` from your host
 2. Mounts it at `/run/secrets/admin_username` inside the container
-3. ComposeCTL reads this file and trims any whitespace/newlines
+3. dc reads this file and trims any whitespace/newlines
 4. Uses the value for authentication
 
 ## Alternative: Using Default Secrets Names
@@ -109,7 +109,7 @@ secrets:
     file: ./secrets/password.txt
 ```
 
-ComposeCTL will automatically check `/run/secrets/ADMIN_USERNAME` and `/run/secrets/ADMIN_PASSWORD`.
+dc will automatically check `/run/secrets/ADMIN_USERNAME` and `/run/secrets/ADMIN_PASSWORD`.
 
 ## Security Best Practices
 
@@ -156,7 +156,7 @@ cat /run/secrets/admin_username
 ### View logs for authentication issues
 
 ```bash
-# Check ComposeCTL logs
+# Check dc logs
 docker-compose logs dcapi
 
 # Look for messages like:

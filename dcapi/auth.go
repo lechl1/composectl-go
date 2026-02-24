@@ -121,7 +121,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Get credentials from Basic Auth header
 	username, password, ok := r.BasicAuth()
 	if !ok {
-		w.Header().Set("WWW-Authenticate", `Basic realm="ComposeCTL - Login"`)
+		w.Header().Set("WWW-Authenticate", `Basic realm="dc - Login"`)
 		http.Error(w, "Basic authentication required", http.StatusUnauthorized)
 		return
 	}
@@ -139,7 +139,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 	passwordMatch := subtle.ConstantTimeCompare([]byte(password), []byte(adminPassword)) == 1
 
 	if !usernameMatch || !passwordMatch {
-		w.Header().Set("WWW-Authenticate", `Basic realm="ComposeCTL - Login"`)
+		w.Header().Set("WWW-Authenticate", `Basic realm="dc - Login"`)
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
@@ -153,7 +153,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "composectl",
+			Issuer:    "dc",
 		},
 	}
 
@@ -260,7 +260,7 @@ func BasicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
 			log.Printf("Missing or invalid Authorization header")
-			w.Header().Set("WWW-Authenticate", `Bearer realm="ComposeCTL - Restricted Access"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="dc - Restricted Access"`)
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte("401 Unauthorized - Bearer token required\n"))
 			return
@@ -272,7 +272,7 @@ func BasicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		_, err := validateBearerToken(tokenString)
 		if err != nil {
 			log.Printf("Bearer token validation failed: %v", err)
-			w.Header().Set("WWW-Authenticate", `Bearer realm="ComposeCTL - Restricted Access"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="dc - Restricted Access"`)
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte("401 Unauthorized - Invalid or expired token\n"))
 			return
@@ -283,7 +283,7 @@ func BasicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 // unauthorizedResponse sends a 401 Unauthorized response with WWW-Authenticate header
 func unauthorizedResponse(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", `Basic realm="ComposeCTL - Restricted Access"`)
+	w.Header().Set("WWW-Authenticate", `Basic realm="dc - Restricted Access"`)
 	w.WriteHeader(http.StatusUnauthorized)
 	w.Write([]byte("401 Unauthorized\n"))
 }

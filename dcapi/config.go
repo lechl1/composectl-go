@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	// StacksDir is the directory containing stack YAML files and all composectl data
+	// StacksDir is the directory containing stack YAML files and all dc data
 	StacksDir string
 
 	// ProdEnvPath is the path to the prod.env file
@@ -338,7 +338,7 @@ func ensureProdEnvCredentials() error {
 
 		writer := bufio.NewWriter(file)
 		writer.WriteString("# Auto-generated secrets for Docker Compose\n")
-		writer.WriteString("# This file is managed automatically by composectl\n")
+		writer.WriteString("# This file is managed automatically by dc\n")
 		writer.WriteString("# Do not edit manually unless you know what you are doing\n")
 		writer.WriteString("\n")
 

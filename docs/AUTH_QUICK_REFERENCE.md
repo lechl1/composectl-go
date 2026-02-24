@@ -1,4 +1,4 @@
-# ComposeCTL - Basic Auth Quick Reference
+# dc - Basic Auth Quick Reference
 
 ## ⚡ Quick Setup
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-ComposeCTL now requires Basic Authentication for all HTTP endpoints. This protects your Docker Compose management interface from unauthorized access.
+dc now requires Basic Authentication for all HTTP endpoints. This protects your Docker Compose management interface from unauthorized access.
 
 ## Initial Setup
 

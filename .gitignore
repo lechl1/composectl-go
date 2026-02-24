@@ -3,3 +3,5 @@ stacks
 thumbnails
 *.log
 prod.env
+/dc/dc
+/dcapi/dcapi

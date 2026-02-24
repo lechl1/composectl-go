@@ -1,4 +1,4 @@
-# ComposeCTL - Docker Compose Management Service
+# dc - Docker Compose Management Service
 
 A web-based management interface for Docker Compose stacks with real-time monitoring and control.
 
@@ -18,7 +18,7 @@ A web-based management interface for Docker Compose stacks with real-time monito
 
 1. **Build the application**:
    ```bash
-   go build -o composectl
+   go build -o dc
    ```
 
 2. **Install and configure**:
@@ -50,7 +50,7 @@ A web-based management interface for Docker Compose stacks with real-time monito
 
 ### Directory Structure
 
-ComposeCTL uses `$HOME/.local/containers` as its base directory:
+dc uses `$HOME/.local/containers` as its base directory:
 
 ```
 $HOME/.local/containers/
@@ -71,7 +71,7 @@ The application uses Basic Authentication to protect all HTTP endpoints. Credent
 
 #### Environment Variables and Secrets Loading
 
-ComposeCTL now supports loading environment variables from **two sources simultaneously**:
+dc now supports loading environment variables from **two sources simultaneously**:
 
 1. **prod.env file** (`$HOME/.local/containers/prod.env`)
 2. **/run/secrets directory** (Docker Swarm secrets location)
@@ -100,8 +100,8 @@ Example docker-compose.yml with secrets:
 ```yaml
 version: '3.8'
 services:
-  composectl:
-    image: composectl:latest
+  dc:
+    image: dc:latest
     environment:
       - ADMIN_USERNAME_FILE=/run/secrets/admin_username
       - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
@@ -203,7 +203,7 @@ make build
 ### Project Structure
 
 ```
-composectl-go/
+dc-go/
 ├── main.go           # Application entry point
 ├── config.go         # Path configuration
 ├── auth.go           # Basic Authentication middleware
@@ -265,7 +265,7 @@ make restart
 
 Check if the service is enabled:
 ```bash
-systemctl --user is-enabled composectl.service
+systemctl --user is-enabled dc.service
 ```
 
 Enable if needed:

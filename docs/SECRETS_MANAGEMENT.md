@@ -6,7 +6,7 @@ The dcapi-go application now automatically manages Docker Compose secrets when e
 
 ## Admin Authentication with Docker Secrets
 
-ComposeCTL supports Docker secrets for admin authentication credentials with the following priority order:
+dc supports Docker secrets for admin authentication credentials with the following priority order:
 
 ### Priority Order
 
@@ -19,7 +19,7 @@ ComposeCTL supports Docker secrets for admin authentication credentials with the
 
 #### Method 1: Using Docker Compose Secrets (Recommended)
 
-Create a `docker-compose.yml` for ComposeCTL:
+Create a `docker-compose.yml` for dc:
 
 ```yaml
 version: '3.8'
@@ -54,7 +54,7 @@ chmod 600 secrets/*.txt
 
 #### Method 2: Using Default Docker Secrets Location
 
-If you don't specify `*_FILE` environment variables, ComposeCTL will automatically check `/run/secrets/ADMIN_USERNAME` and `/run/secrets/ADMIN_PASSWORD`:
+If you don't specify `*_FILE` environment variables, dc will automatically check `/run/secrets/ADMIN_USERNAME` and `/run/secrets/ADMIN_PASSWORD`:
 
 ```yaml
 version: '3.8'

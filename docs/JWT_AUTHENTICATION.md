@@ -1,10 +1,10 @@
 # JWT Bearer Token Authentication
 
-This document describes the JWT bearer token authentication implementation in composectl-go.
+This document describes the JWT bearer token authentication implementation in dc-go.
 
 ## Overview
 
-ComposeCTL uses a token-based authentication system:
+dc uses a token-based authentication system:
 1. **Login Endpoint** - POST to `/login` with Basic Auth to obtain a JWT token
 2. **Bearer Token Authentication** - All other endpoints require JWT bearer tokens
 
@@ -117,7 +117,7 @@ Claims include:
 - `username`: The authenticated user
 - `exp`: Expiration timestamp
 - `iat`: Issued at timestamp
-- `iss`: Issuer ("composectl")
+- `iss`: Issuer ("dc")
 
 ### Authentication Flow
 

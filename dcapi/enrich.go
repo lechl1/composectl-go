@@ -1369,7 +1369,7 @@ func writeProdEnv(filePath string, envVars map[string]string) error {
 
 	// Write header comment
 	fmt.Fprintln(writer, "# Auto-generated secrets for Docker Compose")
-	fmt.Fprintln(writer, "# This file is managed automatically by composectl")
+	fmt.Fprintln(writer, "# This file is managed automatically by dc")
 	fmt.Fprintln(writer, "# Do not edit manually unless you know what you are doing")
 	fmt.Fprintln(writer, "")
 

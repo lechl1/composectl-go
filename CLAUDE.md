@@ -4,22 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ComposeCTL (`composectl`) is a Go HTTP server that provides a REST API and web UI for managing Docker Compose stacks. It handles stack lifecycle (up/down/list/get/put/delete), container inspection, YAML enrichment, JWT authentication, and real-time WebSocket broadcasting.
+dc (`dc`) is a Go HTTP server that provides a REST API and web UI for managing Docker Compose stacks. It handles stack lifecycle (up/down/list/get/put/delete), container inspection, YAML enrichment, JWT authentication, and real-time WebSocket broadcasting.
 
-The Go module name is `dcapi` (not `composectl`).
+The Go module name is `dcapi` (not `dc`).
 
 ## Build & Development Commands
 
 ```bash
-make build      # go build -ldflags="-s -w" -o composectl
+make build      # go build -ldflags="-s -w" -o dc
 make test       # go test -v ./...
 make clean      # remove binary
 
 # Run directly (no install)
-go build -o composectl && ./composectl
+go build -o dc && ./dc
 
 # Command-line flags
-./composectl --stacks-dir=/path/to/stacks --env-path=/path/to/prod.env --port=8882 --addr=0.0.0.0
+./dc --stacks-dir=/path/to/stacks --env-path=/path/to/prod.env --port=8882 --addr=0.0.0.0
 ```
 
 ## Service Management (systemd user service)
