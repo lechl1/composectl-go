@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -26,18 +27,67 @@ type Stack struct {
 	Containers []DockerInspect `json:"containers"`
 }
 
-// detectHTTPPort inspects a service and tries to find a reasonable HTTP/HTTPS port
-// Returns (portString, isHTTPS, usesHTTPPort)
-func detectHTTPPort(service ComposeService) (string, bool, bool) {
+func detectHTTPPort(service *ComposeService) (string, string, bool) {
+	standardHTTPPorts := []string{"80", "443", "8000", "8080", "8081", "3000", "3001", "5000", "5001", "8443"}
+
+	// Normalize labels into map[string]string for flexible handling
+	labelsMap := make(map[string]string)
+	if service.Labels != nil {
+		switch v := service.Labels.(type) {
+		case map[string]interface{}:
+			for k, val := range v {
+				labelsMap[k] = fmt.Sprintf("%v", val)
+			}
+		case map[string]string:
+			for k, val := range v {
+				labelsMap[k] = val
+			}
+		case map[interface{}]interface{}:
+			for k, val := range v {
+				if ks, ok := k.(string); ok {
+					labelsMap[ks] = fmt.Sprintf("%v", val)
+				}
+			}
+		case []interface{}:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					if parts := strings.SplitN(s, "=", 2); len(parts) == 2 {
+						labelsMap[parts[0]] = parts[1]
+					}
+				}
+			}
+		case []string:
+			for _, s := range v {
+				if parts := strings.SplitN(s, "=", 2); len(parts) == 2 {
+					labelsMap[parts[0]] = parts[1]
+				}
+			}
+		}
+	}
+
+	for key, value := range labelsMap {
+		if strings.Contains(strings.ToLower(key), "port") {
+			valueStr := fmt.Sprintf("%v", value)
+			for _, httpPort := range standardHTTPPorts {
+				if strings.Contains(valueStr, httpPort) {
+					if httpPort == "443" || httpPort == "8443" {
+						return httpPort, "https", true
+					}
+					return httpPort, "http", true
+				}
+			}
+		}
+	}
 	// Check explicit ports first
 	for _, p := range service.Ports {
 		// port formats: host:container, container, container/proto
 		parts := strings.Split(p, ":")
-		cand := parts[len(parts)-1]
-		cand = strings.Split(cand, "/")[0]
-		if cand != "" {
-			isHTTPS := (cand == "443" || cand == "8443")
-			return cand, isHTTPS, true
+		httpPort := strings.Split(parts[len(parts)-1], "/")[0]
+		if httpPort != "" {
+			if httpPort == "443" || httpPort == "8443" {
+				return httpPort, "https", true
+			}
+			return httpPort, "http", true
 		}
 	}
 
@@ -47,35 +97,111 @@ func detectHTTPPort(service ComposeService) (string, bool, bool) {
 		if strings.Contains(strings.ToUpper(env), "PORT=") {
 			parts := strings.SplitN(env, "=", 2)
 			if len(parts) == 2 {
-				cand := extractPortNumber(parts[1])
-				if cand > 0 {
-					portStr := fmt.Sprintf("%d", cand)
-					isHTTPS := (portStr == "443" || portStr == "8443")
-					return portStr, isHTTPS, true
+				httpPort := extractPortNumber(parts[1])
+				if httpPort > 0 {
+					if httpPort == 443 || httpPort == 8443 {
+						return strconv.FormatInt(int64(httpPort), 10), "https", true
+					}
+					return strconv.FormatInt(int64(httpPort), 10), "http", true
 				}
 			}
 		}
 	}
 
-	return "", false, false
+	return "", "", false
 }
 
 // addTraefikLabelsInterface adds a minimal set of Traefik labels into a generic labels map
-func addTraefikLabelsInterface(labels map[string]interface{}, serviceName, port, scheme string) {
-	if labels == nil {
-		return
-	}
-	// Add simple router rule and service port label
+func addTraefikLabelsInterface(service *ComposeService, serviceName, port, scheme string) {
+	fmt.Printf("Adding Traefik labels to service '%s' for port %s and scheme %s...\n", serviceName, port, scheme)
+
 	routerKey := fmt.Sprintf("traefik.http.routers.%s.rule", serviceName)
-	labels[routerKey] = fmt.Sprintf("Host(`%s`)", serviceName)
 	servicePortKey := fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", serviceName)
-	labels[servicePortKey] = port
-	// Add entrypoint based on scheme
 	entrypointKey := fmt.Sprintf("traefik.http.routers.%s.entrypoints", serviceName)
+	entrypointVal := "http"
 	if scheme == "https" {
-		labels[entrypointKey] = "https"
-	} else {
-		labels[entrypointKey] = "http"
+		entrypointVal = "https"
+	}
+
+	switch v := service.Labels.(type) {
+	case map[string]interface{}:
+		// set as map[string]interface{}
+		v[routerKey] = fmt.Sprintf("Host(`%s`)", serviceName)
+		v[servicePortKey] = port
+		v[entrypointKey] = entrypointVal
+		service.Labels = v
+
+	case map[string]string:
+		v[routerKey] = fmt.Sprintf("Host(`%s`)", serviceName)
+		v[servicePortKey] = port
+		v[entrypointKey] = entrypointVal
+		service.Labels = v
+
+	case map[interface{}]interface{}:
+		// convert to map[string]interface{}
+		out := make(map[string]interface{})
+		for key, val := range v {
+			if ks, ok := key.(string); ok {
+				out[ks] = val
+			}
+		}
+		out[routerKey] = fmt.Sprintf("Host(`%s`)", serviceName)
+		out[servicePortKey] = port
+		out[entrypointKey] = entrypointVal
+		service.Labels = out
+
+	case []interface{}:
+		// filter out existing keys we will set and append key=value strings
+		newArr := make([]interface{}, 0, len(v)+3)
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				if parts := strings.SplitN(s, "=", 2); len(parts) == 2 {
+					k := parts[0]
+					if k == routerKey || k == servicePortKey || k == entrypointKey {
+						continue
+					}
+				}
+				newArr = append(newArr, s)
+			} else {
+				newArr = append(newArr, item)
+			}
+		}
+		newArr = append(newArr, fmt.Sprintf("%s=%s", routerKey, fmt.Sprintf("Host(`%s`)", serviceName)))
+		newArr = append(newArr, fmt.Sprintf("%s=%s", servicePortKey, port))
+		newArr = append(newArr, fmt.Sprintf("%s=%s", entrypointKey, entrypointVal))
+		service.Labels = newArr
+
+	case []string:
+		newArr := make([]string, 0, len(v)+3)
+		for _, s := range v {
+			if parts := strings.SplitN(s, "=", 2); len(parts) == 2 {
+				k := parts[0]
+				if k == routerKey || k == servicePortKey || k == entrypointKey {
+					continue
+				}
+			}
+			newArr = append(newArr, s)
+		}
+		newArr = append(newArr, fmt.Sprintf("%s=%s", routerKey, fmt.Sprintf("Host(`%s`)", serviceName)))
+		newArr = append(newArr, fmt.Sprintf("%s=%s", servicePortKey, port))
+		newArr = append(newArr, fmt.Sprintf("%s=%s", entrypointKey, entrypointVal))
+		service.Labels = newArr
+
+	case nil:
+		m := make(map[string]string)
+		m[routerKey] = fmt.Sprintf("Host(`%s`)", serviceName)
+		m[servicePortKey] = port
+		m[entrypointKey] = entrypointVal
+		service.Labels = m
+
+	default:
+		// Unknown type: try to coerce common map types via fmt conversion
+		// Fallback to map[string]string
+		m := make(map[string]string)
+		m[routerKey] = fmt.Sprintf("Host(`%s`)", serviceName)
+		m[servicePortKey] = port
+		m[entrypointKey] = entrypointVal
+		service.Labels = m
 	}
 }
 
@@ -141,25 +267,195 @@ func replacePlaceholders(compose *ComposeFile) {
 	}
 }
 
+// ensureHomelabInServices makes sure every service references the "homelab" network.
+// Handles common network representations (nil, []interface{}, []string, map[string]interface{}).
+func ensureHomelabInServices(compose *ComposeFile) {
+	if compose == nil || compose.Services == nil {
+		return
+	}
+
+	for name, service := range compose.Services {
+		added := false
+
+		switch v := service.Networks.(type) {
+		case nil:
+			// No networks declared, set to sequence containing homelab
+			service.Networks = []interface{}{"homelab"}
+			added = true
+
+		case string:
+			// Single network as string
+			if v != "homelab" {
+				service.Networks = []interface{}{v, "homelab"}
+				added = true
+			}
+
+		case []interface{}:
+			found := false
+			for _, item := range v {
+				switch it := item.(type) {
+				case string:
+					if it == "homelab" {
+						found = true
+					}
+				case map[string]interface{}:
+					if _, ok := it["homelab"]; ok {
+						found = true
+					}
+				case map[interface{}]interface{}:
+					if _, ok := it["homelab"]; ok {
+						found = true
+					}
+				}
+				if found {
+					break
+				}
+			}
+			if !found {
+				// Prefer to append a string entry for simplicity; some compose parsers also accept a map entry.
+				v = append(v, "homelab")
+				service.Networks = v
+				added = true
+			}
+
+		case []string:
+			found := false
+			for _, s := range v {
+				if s == "homelab" {
+					found = true
+					break
+				}
+			}
+			if !found {
+				v = append(v, "homelab")
+				// convert to []interface{} to remain compatible with other code paths
+				iface := make([]interface{}, len(v))
+				for i := range v {
+					iface[i] = v[i]
+				}
+				service.Networks = iface
+				added = true
+			}
+
+		case map[string]interface{}:
+			if _, ok := v["homelab"]; !ok {
+				// Add an empty map as network config
+				v["homelab"] = map[string]interface{}{}
+				service.Networks = v
+				added = true
+			}
+
+		case map[interface{}]interface{}:
+			if _, ok := v["homelab"]; !ok {
+				v["homelab"] = map[string]interface{}{}
+				// convert map[interface{}]interface{} to map[string]interface{}
+				out := make(map[string]interface{})
+				for k, val := range v {
+					if ks, ok := k.(string); ok {
+						out[ks] = val
+					}
+				}
+				service.Networks = out
+				added = true
+			}
+
+		default:
+			// Unknown type: try to stringify and append if possible
+			if s, ok := v.(fmt.Stringer); ok {
+				cur := s.String()
+				if cur != "homelab" {
+					service.Networks = []interface{}{cur, "homelab"}
+					added = true
+				}
+			}
+		}
+
+		if added {
+			compose.Services[name] = service
+		}
+	}
+}
+
+// New helper: ensureContainerNames sets ContainerName to the service key when it's not defined.
+// This makes the effective compose file explicit about container names and ensures subsequent
+// processing (like simulated container creation) uses predictable names.
+func ensureContainerNames(compose *ComposeFile) {
+	if compose == nil || compose.Services == nil {
+		return
+	}
+
+	for serviceName, service := range compose.Services {
+		if strings.TrimSpace(service.ContainerName) == "" {
+			// Default container_name to the service key
+			service.ContainerName = serviceName
+			compose.Services[serviceName] = service
+		}
+	}
+}
+
+// New helper: ensureResourceDefaults sets MemLimit to "256m" and CPUs to 0.5 when they are not defined
+func ensureResourceDefaults(compose *ComposeFile) {
+	if compose == nil || compose.Services == nil {
+		return
+	}
+
+	for serviceName, service := range compose.Services {
+		// MemLimit: set default if empty or whitespace
+		if strings.TrimSpace(service.MemLimit) == "" {
+			service.MemLimit = "256m"
+		}
+
+		// CPUs: service.CPUs can be nil, string, or numeric. Only set default when not defined or empty string.
+		switch v := service.CPUs.(type) {
+		case nil:
+			service.CPUs = 0.5
+		case string:
+			if strings.TrimSpace(v) == "" {
+				service.CPUs = 0.5
+			}
+		default:
+			// assume numeric or other defined value; leave as-is
+		}
+
+		compose.Services[serviceName] = service
+	}
+}
+
 // enrichAndSanitizeCompose enriches and sanitizes a compose structure
 // If dryRun is true, it will not write to prod.env or files
 // NOTE: This function now operates in-place on the provided ComposeFile and does NOT
 // perform any YAML serialization or return any bytes. Serialization is the caller's
 // responsibility so it can decide when to write or return YAML (for example only inside !dryRun).
-func enrichAndSanitizeCompose(compose *ComposeFile, dryRun bool) {
+func enrichAndSanitizeCompose(compose *ComposeFile) {
 	// operate directly on the provided ComposeFile struct
 
 	// Process secrets with or without side effects based on dryRun
-	processSecrets(compose, dryRun)
+	processSecrets(compose)
 
 	// Replace placeholders (DOCKER_SOCK, DOCKER_SOCKET, etc.)
 	replacePlaceholders(compose)
+
+	// Ensure container_name is set for services that lack it
+	ensureContainerNames(compose)
+
+	// Ensure resource defaults for services
+	ensureResourceDefaults(compose)
+
+	// Ensure every service references the homelab network
+	ensureHomelabInServices(compose)
 
 	// Add undeclared networks/volumes
 	addUndeclaredNetworksAndVolumes(compose)
 
 	// Sanitize passwords with or without extraction based on dryRun
-	sanitizeComposePasswords(compose, dryRun)
+	sanitizeComposePasswords(compose)
+
+	for serviceName, service := range compose.Services {
+		fmt.Printf("Enriching proxy labels '%s'...\n", serviceName)
+		enrichWithProxy(&service, serviceName)
+		// write back the possibly modified service so changes persist in the compose struct
+		compose.Services[serviceName] = service
+	}
 }
 
 // handleStackAPI routes stack API requests to appropriate handlers
@@ -1156,7 +1452,7 @@ func extractVariableReferences(value string) []string {
 // sanitizeComposePasswords sanitizes environment variables in a ComposeFile
 // by extracting plaintext passwords to prod.env and replacing them with variable references ${ENV_KEY}
 // If dryRun is true, it will skip writing to prod.env
-func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
+func sanitizeComposePasswords(compose *ComposeFile) {
 	// Read existing prod.env
 	envVars, err := readProdEnv(ProdEnvPath)
 	if err != nil {
@@ -1415,7 +1711,7 @@ func sanitizeComposePasswords(compose *ComposeFile, dryRun bool) {
 	}
 
 	// Write back to prod.env if modified (skip if dry run)
-	if modified && !dryRun {
+	if modified {
 		if err := writeProdEnv(ProdEnvPath, envVars); err != nil {
 			log.Printf("Warning: Failed to write prod.env: %v", err)
 		} else {
@@ -1519,33 +1815,7 @@ func reconstructComposeFromContainers(inspectData []DockerInspect) (string, erro
 			service.Networks = networkNames
 		}
 
-		// Check if standard HTTP/HTTPS ports are used before filtering labels
-		detectedPort, isHTTPS, usesHTTPPort := detectHTTPPort(service)
-
-		// If port not detected from service config, check in original labels for port hints
-		if !usesHTTPPort {
-			standardHTTPPorts := []string{"80", "8000", "8080", "8081", "443", "8443", "3000", "3001", "5000", "5001"}
-			for key, value := range labels {
-				if strings.Contains(strings.ToLower(key), "port") {
-					valueStr := fmt.Sprintf("%v", value)
-					for _, httpPort := range standardHTTPPorts {
-						if strings.Contains(valueStr, httpPort) {
-							usesHTTPPort = true
-							detectedPort = httpPort
-							// Check if it's HTTPS port
-							if httpPort == "443" || httpPort == "8443" {
-								isHTTPS = true
-							}
-							break
-						}
-					}
-				}
-				if usesHTTPPort {
-					break
-				}
-			}
-		}
-
+		enrichWithProxy(&service, serviceName)
 		// Labels (filter out compose-specific labels, opencontainers labels, and traefik labels)
 		serviceLabels := make(map[string]interface{})
 		for key, value := range labels {
@@ -1555,28 +1825,11 @@ func reconstructComposeFromContainers(inspectData []DockerInspect) (string, erro
 				serviceLabels[key] = value
 			}
 		}
-
-		// Add Traefik labels if HTTP port detected
-		if usesHTTPPort {
-			scheme := "http"
-			if isHTTPS {
-				scheme = "https"
-			}
-			if detectedPort == "" {
-				detectedPort = "80"
-			}
-			addTraefikLabelsInterface(serviceLabels, serviceName, detectedPort, scheme)
-		}
-
-		if len(serviceLabels) > 0 {
-			service.Labels = serviceLabels
-		}
-
 		compose.Services[serviceName] = service
 	}
 
 	// Process secrets to ensure proper declaration
-	processSecrets(&compose, false)
+	processSecrets(&compose)
 
 	// Marshal to YAML with 2-space indentation and multiline string support
 	var buf strings.Builder
@@ -1591,6 +1844,14 @@ func reconstructComposeFromContainers(inspectData []DockerInspect) (string, erro
 	}
 
 	return buf.String(), nil
+}
+
+func enrichWithProxy(service *ComposeService, serviceName string) {
+	fmt.Printf("Enriching service '%s' with proxy labels if applicable...\n", serviceName)
+
+	if detectedPort, scheme, usesHTTPPort := detectHTTPPort(service); usesHTTPPort {
+		addTraefikLabelsInterface(service, serviceName, detectedPort, scheme)
+	}
 }
 
 // HandleGetStack handles GET /api/stacks/{name}
@@ -1709,7 +1970,7 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 		http.Error(w, fmt.Sprintf("Failed to parse YAML: %v", err), http.StatusBadRequest)
 		return
 	}
-	sanitizeComposePasswords(&modifiedComposeFile, dryRun)
+	sanitizeComposePasswords(&modifiedComposeFile)
 
 	// Marshal the sanitized original version back to YAML for .yml file
 	var originalComposeYamlBuffer strings.Builder
@@ -1719,7 +1980,7 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 		return
 	}
 
-	enrichAndSanitizeCompose(&modifiedComposeFile, dryRun)
+	enrichAndSanitizeCompose(&modifiedComposeFile)
 
 	// Marshal the sanitized original version back to YAML for .yml file
 	var modifiedComposeYamlBuffer strings.Builder
@@ -2048,16 +2309,45 @@ func addUndeclaredNetworksAndVolumes(compose *ComposeFile) {
 	for _, service := range compose.Services {
 		// Extract networks from service
 		switch v := service.Networks.(type) {
+		case nil:
+			// nothing to do
+		case string:
+			if v != "" {
+				referencedNetworks[v] = true
+			}
 		case []interface{}:
 			for _, net := range v {
-				if netStr, ok := net.(string); ok {
-					referencedNetworks[netStr] = true
+				switch n := net.(type) {
+				case string:
+					referencedNetworks[n] = true
+				case map[string]interface{}:
+					for name := range n {
+						referencedNetworks[name] = true
+					}
+				case map[interface{}]interface{}:
+					for k := range n {
+						if ks, ok := k.(string); ok {
+							referencedNetworks[ks] = true
+						}
+					}
 				}
+			}
+		case []string:
+			for _, net := range v {
+				referencedNetworks[net] = true
 			}
 		case map[string]interface{}:
 			for net := range v {
 				referencedNetworks[net] = true
 			}
+		case map[interface{}]interface{}:
+			for k := range v {
+				if ks, ok := k.(string); ok {
+					referencedNetworks[ks] = true
+				}
+			}
+		default:
+			// Unknown type: ignore safely
 		}
 
 		// Extract volumes from service
@@ -2212,7 +2502,7 @@ func getLowestPrivilegedPort(service ComposeService, labelsMap map[string]string
 // processSecrets scans environment variables for /run/secrets/ references
 // and ensures the corresponding secrets are declared at both service and top level
 // If dryRun is true, it will not write to prod.env (no file system modifications)
-func processSecrets(compose *ComposeFile, dryRun bool) {
+func processSecrets(compose *ComposeFile) {
 	// Track all secrets that need to be declared at top level
 	requiredSecrets := make(map[string]bool)
 
@@ -2259,11 +2549,7 @@ func processSecrets(compose *ComposeFile, dryRun bool) {
 			for secretName := range serviceSecrets {
 				if !existingSecrets[secretName] {
 					service.Secrets = append(service.Secrets, secretName)
-					if dryRun {
-						log.Printf("Auto-added secret '%s' to service '%s' (dry run)", secretName, serviceName)
-					} else {
-						log.Printf("Auto-added secret '%s' to service '%s'", secretName, serviceName)
-					}
+					log.Printf("Auto-added secret '%s' to service '%s'", secretName, serviceName)
 				}
 			}
 
@@ -2284,16 +2570,11 @@ func processSecrets(compose *ComposeFile, dryRun bool) {
 				Name:        secretName,
 				Environment: secretName,
 			}
-			if dryRun {
-				log.Printf("Auto-added top-level secret declaration for '%s' (dry run)", secretName)
-			} else {
-				log.Printf("Auto-added top-level secret declaration for '%s'", secretName)
-			}
+			log.Printf("Auto-added top-level secret declaration for '%s'", secretName)
 		}
 	}
 
-	// Ensure all secrets exist in prod.env file (only if not in dry run mode)
-	if !dryRun && len(requiredSecrets) > 0 {
+	if len(requiredSecrets) > 0 {
 		secretNames := make([]string, 0, len(requiredSecrets))
 		for secretName := range requiredSecrets {
 			secretNames = append(secretNames, secretName)
