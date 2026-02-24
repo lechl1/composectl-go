@@ -250,8 +250,6 @@ func validateBearerToken(tokenString string) (*Claims, error) {
 	// Renew session - extend expiration by 12 hours from now
 	newExpiresAt := time.Now().Add(12 * time.Hour)
 	sessionStore.RenewSession(tokenString, newExpiresAt)
-	log.Printf("Session renewed for user %s, new expiration: %s", claims.Username, newExpiresAt.Format(time.RFC3339))
-
 	return claims, nil
 }
 
@@ -271,7 +269,7 @@ func BasicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
 		// Validate bearer token (also renews session)
-		claims, err := validateBearerToken(tokenString)
+		_, err := validateBearerToken(tokenString)
 		if err != nil {
 			log.Printf("Bearer token validation failed: %v", err)
 			w.Header().Set("WWW-Authenticate", `Bearer realm="ComposeCTL - Restricted Access"`)
@@ -279,9 +277,6 @@ func BasicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			w.Write([]byte("401 Unauthorized - Invalid or expired token\n"))
 			return
 		}
-
-		// Token is valid, proceed with request
-		log.Printf("Authenticated via bearer token: %s", claims.Username)
 		next(w, r)
 	}
 }

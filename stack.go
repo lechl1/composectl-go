@@ -26,6 +26,142 @@ type Stack struct {
 	Containers []DockerInspect `json:"containers"`
 }
 
+// detectHTTPPort inspects a service and tries to find a reasonable HTTP/HTTPS port
+// Returns (portString, isHTTPS, usesHTTPPort)
+func detectHTTPPort(service ComposeService) (string, bool, bool) {
+	// Check explicit ports first
+	for _, p := range service.Ports {
+		// port formats: host:container, container, container/proto
+		parts := strings.Split(p, ":")
+		cand := parts[len(parts)-1]
+		cand = strings.Split(cand, "/")[0]
+		if cand != "" {
+			isHTTPS := (cand == "443" || cand == "8443")
+			return cand, isHTTPS, true
+		}
+	}
+
+	// Check environment variables for common port names
+	envArr := normalizeEnvironment(service.Environment)
+	for _, env := range envArr {
+		if strings.Contains(strings.ToUpper(env), "PORT=") {
+			parts := strings.SplitN(env, "=", 2)
+			if len(parts) == 2 {
+				cand := extractPortNumber(parts[1])
+				if cand > 0 {
+					portStr := fmt.Sprintf("%d", cand)
+					isHTTPS := (portStr == "443" || portStr == "8443")
+					return portStr, isHTTPS, true
+				}
+			}
+		}
+	}
+
+	return "", false, false
+}
+
+// addTraefikLabelsInterface adds a minimal set of Traefik labels into a generic labels map
+func addTraefikLabelsInterface(labels map[string]interface{}, serviceName, port, scheme string) {
+	if labels == nil {
+		return
+	}
+	// Add simple router rule and service port label
+	routerKey := fmt.Sprintf("traefik.http.routers.%s.rule", serviceName)
+	labels[routerKey] = fmt.Sprintf("Host(`%s`)", serviceName)
+	servicePortKey := fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", serviceName)
+	labels[servicePortKey] = port
+	// Add entrypoint based on scheme
+	entrypointKey := fmt.Sprintf("traefik.http.routers.%s.entrypoints", serviceName)
+	if scheme == "https" {
+		labels[entrypointKey] = "https"
+	} else {
+		labels[entrypointKey] = "http"
+	}
+}
+
+// getDockerSocketPath returns a sensible docker socket path
+func getDockerSocketPath() string {
+	if v := os.Getenv("DOCKER_SOCK"); v != "" {
+		return v
+	}
+	return "/var/run/docker.sock"
+}
+
+// getCurrentUserID returns current user id as string
+func getCurrentUserID() string {
+	return fmt.Sprintf("%d", os.Geteuid())
+}
+
+// getCurrentGroupID returns current group id as string
+func getCurrentGroupID() string {
+	return fmt.Sprintf("%d", os.Getegid())
+}
+
+// replacePlaceholders replaces placeholders like ${DOCKER_SOCK}, ${USER_ID}, ${USER_GID}
+func replacePlaceholders(compose *ComposeFile) {
+	dockerSocket := getDockerSocketPath()
+	userID := getCurrentUserID()
+	groupID := getCurrentGroupID()
+
+	for name, service := range compose.Services {
+		// Volumes
+		for i, vol := range service.Volumes {
+			vol = strings.ReplaceAll(vol, "${DOCKER_SOCK}", dockerSocket)
+			vol = strings.ReplaceAll(vol, "${DOCKER_SOCKET}", dockerSocket)
+			vol = strings.ReplaceAll(vol, "$DOCKER_SOCK", dockerSocket)
+			vol = strings.ReplaceAll(vol, "$DOCKER_SOCKET", dockerSocket)
+			vol = strings.ReplaceAll(vol, "${USER_ID}", userID)
+			vol = strings.ReplaceAll(vol, "$USER_ID", userID)
+			vol = strings.ReplaceAll(vol, "${USER_GID}", groupID)
+			vol = strings.ReplaceAll(vol, "$USER_GID", groupID)
+			service.Volumes[i] = vol
+		}
+
+		// Environment map/array
+		if service.Environment != nil {
+			switch v := service.Environment.(type) {
+			case map[string]interface{}:
+				for k, val := range v {
+					if s, ok := val.(string); ok {
+						v[k] = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(s, "${DOCKER_SOCK}", dockerSocket), "${USER_ID}", userID), "${USER_GID}", groupID)
+					}
+				}
+				service.Environment = v
+			case []interface{}:
+				for i, item := range v {
+					if s, ok := item.(string); ok {
+						v[i] = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(s, "${DOCKER_SOCK}", dockerSocket), "${USER_ID}", userID), "${USER_GID}", groupID)
+					}
+				}
+				service.Environment = v
+			}
+		}
+
+		compose.Services[name] = service
+	}
+}
+
+// enrichAndSanitizeCompose enriches and sanitizes a compose structure
+// If dryRun is true, it will not write to prod.env or files
+// NOTE: This function now operates in-place on the provided ComposeFile and does NOT
+// perform any YAML serialization or return any bytes. Serialization is the caller's
+// responsibility so it can decide when to write or return YAML (for example only inside !dryRun).
+func enrichAndSanitizeCompose(compose *ComposeFile, dryRun bool) {
+	// operate directly on the provided ComposeFile struct
+
+	// Process secrets with or without side effects based on dryRun
+	processSecrets(compose, dryRun)
+
+	// Replace placeholders (DOCKER_SOCK, DOCKER_SOCKET, etc.)
+	replacePlaceholders(compose)
+
+	// Add undeclared networks/volumes
+	addUndeclaredNetworksAndVolumes(compose)
+
+	// Sanitize passwords with or without extraction based on dryRun
+	sanitizeComposePasswords(compose, dryRun)
+}
+
 // handleStackAPI routes stack API requests to appropriate handlers
 func handleStackAPI(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -134,8 +270,9 @@ type ComposeAction int
 
 const (
 	ComposeActionNone ComposeAction = iota
-	ComposeActionUp
-	ComposeActionDown
+	ComposeActionUp   ComposeAction = iota
+	ComposeActionDown ComposeAction = iota
+	ComposeActionStop ComposeAction = iota
 )
 
 // normalizeEnvironment converts environment variables from map or array format to array format
@@ -815,7 +952,7 @@ func HandleStopStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	HandleDockerComposeFile(w, r, stackName, false, ComposeActionDown)
+	HandleDockerComposeFile(w, r, stackName, false, ComposeActionStop)
 }
 
 // HandleStartStack handles POST /api/stacks/{name}/start
@@ -1556,62 +1693,107 @@ func HandlePutStack(w http.ResponseWriter, r *http.Request) {
 func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName string, dryRun bool, action ComposeAction) {
 	// Read the request body
 	body, err := io.ReadAll(r.Body)
+	defer r.Body.Close()
+
 	if err != nil {
 		log.Printf("Error reading request body: %v", err)
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
-
-	// Validate YAML syntax before processing
-	var testCompose ComposeFile
-	if err := yaml.Unmarshal(body, &testCompose); err != nil {
-		log.Printf("Invalid YAML syntax for stack %s: %v", stackName, err)
-		http.Error(w, fmt.Sprintf("Invalid YAML syntax: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	// Validate that services section exists
-	if testCompose.Services == nil || len(testCompose.Services) == 0 {
-		log.Printf("No services defined in stack %s", stackName)
-		http.Error(w, "Invalid compose file: no services defined", http.StatusBadRequest)
-		return
-	}
 
 	// First, sanitize passwords and extract them to prod.env
 	// This must be done BEFORE enrichment to capture plaintext passwords
-	var originalCompose ComposeFile
-	if err := yaml.Unmarshal(body, &originalCompose); err != nil {
+	var modifiedComposeFile ComposeFile
+	if err := yaml.Unmarshal(body, &modifiedComposeFile); err != nil {
 		log.Printf("Error parsing YAML for sanitization: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to parse YAML: %v", err), http.StatusBadRequest)
 		return
 	}
-	sanitizeComposePasswords(&originalCompose, dryRun)
+	sanitizeComposePasswords(&modifiedComposeFile, dryRun)
 
 	// Marshal the sanitized original version back to YAML for .yml file
-	var sanitizedBuf strings.Builder
-	if err := encodeYAMLWithMultiline(&sanitizedBuf, originalCompose); err != nil {
-		log.Printf("Error encoding sanitized YAML: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to encode YAML: %v", err), http.StatusInternalServerError)
-		return
-	}
-	sanitizedYAML := []byte(sanitizedBuf.String())
-
-	// Now enrich and sanitize the YAML for the effective file
-	// Note: We work with the original body (with plaintext passwords) so enrichment can process them
-	// The enrichAndSanitizeCompose function with dryRun=false will extract passwords to prod.env
-	enrichedSanitizedYAML, err := enrichAndSanitizeCompose(body, dryRun)
-	if err != nil {
-		log.Printf("Error enriching compose file: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to process compose file: %v", err), http.StatusBadRequest)
+	var originalComposeYamlBuffer strings.Builder
+	if err := encodeYAMLWithMultiline(&originalComposeYamlBuffer, modifiedComposeFile); err != nil {
+		log.Printf("Failed to serialize original YAML: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to serialize original YAML: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// Construct the file paths
-	originalFilePath := GetStackPath(stackName, false)
-	effectiveFilePath := GetStackPath(stackName, true)
+	enrichAndSanitizeCompose(&modifiedComposeFile, dryRun)
 
-	if !dryRun {
+	// Marshal the sanitized original version back to YAML for .yml file
+	var modifiedComposeYamlBuffer strings.Builder
+	if err := encodeYAMLWithMultiline(&modifiedComposeYamlBuffer, modifiedComposeFile); err != nil {
+		log.Printf("Failed to serialize modified YAML: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to serialize modified YAML: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var cmd *exec.Cmd
+	var actionName string
+	// Set up streaming headers before docker modifiedComposeFile up/down
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Transfer-Encoding", "chunked")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+
+	if dryRun {
+		return
+	}
+
+	switch action {
+	case ComposeActionUp:
+		actionName = "up"
+		// Create missing networks and volumes before docker modifiedComposeFile up/down
+		if err = ensureNetworksExist(&modifiedComposeFile, w); err != nil {
+			log.Printf("Error ensuring networks exist for stack %s: %v", stackName, err)
+			fmt.Fprintf(w, "[ERROR] Failed to ensure networks exist: %v\n", err)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+		if err = ensureVolumesExist(&modifiedComposeFile, w); err != nil {
+			log.Printf("Error ensuring volumes exist for stack %s: %v", stackName, err)
+			fmt.Fprintf(w, "[ERROR] Failed to ensure volumes exist: %v\n", err)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+
+		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(w, modifiedComposeFile); !done {
+			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "up", "-d", "--wait", "--remove-orphans")
+			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
+			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
+		}
+	case ComposeActionDown:
+		actionName = "down"
+		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(w, modifiedComposeFile); !done {
+			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down", "--wait", "--remove-orphans")
+			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
+			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
+		}
+	case ComposeActionStop:
+		actionName = "stop"
+		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(w, modifiedComposeFile); !done {
+			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "stop")
+			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
+			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
+		}
+	}
+
+	if cmd != nil {
+		log.Printf("Executing docker modifiedComposeFile %s for stack: %s", actionName, stackName)
+
+		// Stream the output (headers already set above)
+		if err := streamCommandOutput(w, cmd); err != nil {
+			log.Printf("Error executing docker modifiedComposeFile %s for stack %s: %v", actionName, stackName, err)
+			// Error already written to response stream
+			return
+		}
+		log.Printf("Successfully executed docker modifiedComposeFile %s for stack %s", actionName, stackName)
+	}
+
+	if action == ComposeActionNone || action == ComposeActionUp {
 		// Ensure the stacks directory exists
 		if err := os.MkdirAll(StacksDir, 0755); err != nil {
 			log.Printf("Error creating stacks directory: %v", err)
@@ -1619,102 +1801,45 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 			return
 		}
 
+		// Construct the file paths
+		originalFilePath := GetStackPath(stackName, false)
+		effectiveFilePath := GetStackPath(stackName, true)
+
 		// Write the original file (sanitized user-provided content without plaintext passwords)
-		if err := os.WriteFile(originalFilePath, sanitizedYAML, 0644); err != nil {
+		if err := os.WriteFile(originalFilePath, []byte(originalComposeYamlBuffer.String()), 0644); err != nil {
 			log.Printf("Error writing original stack file %s: %v", originalFilePath, err)
 			http.Error(w, "Failed to write original stack file", http.StatusInternalServerError)
 			return
 		}
 
 		// Write the effective file (enriched and sanitized - no plaintext passwords)
-		if err := os.WriteFile(effectiveFilePath, enrichedSanitizedYAML, 0644); err != nil {
+		if err := os.WriteFile(effectiveFilePath, []byte(modifiedComposeYamlBuffer.String()), 0644); err != nil {
 			log.Printf("Error writing effective stack file %s: %v", effectiveFilePath, err)
 			http.Error(w, "Failed to write effective stack file", http.StatusInternalServerError)
 			return
 		}
-		log.Printf("Successfully updated stack: %s (original: %s, effective: %s)", stackName, originalFilePath, effectiveFilePath)
-
-		var cmd *exec.Cmd
-		var actionName string
-
-		switch action {
-		case ComposeActionNone:
-			// No action to perform
-		case ComposeActionUp, ComposeActionDown:
-			// Parse the effective compose file to get networks and volumes
-			var effectiveCompose ComposeFile
-			if err := yaml.Unmarshal(enrichedSanitizedYAML, &effectiveCompose); err != nil {
-				log.Printf("Error parsing effective compose file for stack %s: %v", stackName, err)
-				http.Error(w, fmt.Sprintf("Failed to parse effective compose file: %v", err), http.StatusInternalServerError)
-				return
-			}
-
-			// Set up streaming headers before creating networks/volumes
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.Header().Set("Transfer-Encoding", "chunked")
-			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w.WriteHeader(http.StatusOK)
-
-			// Create missing networks and volumes before docker compose up/down
-			// Pass ResponseWriter to stream output
-			if err := ensureNetworksExist(&effectiveCompose, w); err != nil {
-				log.Printf("Error ensuring networks exist for stack %s: %v", stackName, err)
-				fmt.Fprintf(w, "[ERROR] Failed to create networks: %v\n", err)
-				if flusher, ok := w.(http.Flusher); ok {
-					flusher.Flush()
-				}
-				return
-			}
-
-			if err := ensureVolumesExist(&effectiveCompose, w); err != nil {
-				log.Printf("Error ensuring volumes exist for stack %s: %v", stackName, err)
-				fmt.Fprintf(w, "[ERROR] Failed to create volumes: %v\n", err)
-				if flusher, ok := w.(http.Flusher); ok {
-					flusher.Flush()
-				}
-				return
-			}
-
-			// Replace environment variables in the effective YAML content
-			yamlContent, err := replaceEnvVarsInYAML(effectiveFilePath)
-			if err != nil {
-				log.Printf("Error replacing environment variables in compose file: %v", err)
-				fmt.Fprintf(w, "[ERROR] Failed to process compose file: %v\n", err)
-				if flusher, ok := w.(http.Flusher); ok {
-					flusher.Flush()
-				}
-				return
-			}
-
-			if action == ComposeActionUp {
-				actionName = "up"
-				cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "up", "-d", "--wait", "--remove-orphans")
-			} else {
-				actionName = "down"
-				cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down")
-			}
-
-			// Set stdin to the processed YAML content
-			cmd.Stdin = strings.NewReader(yamlContent)
-		}
-
-		if cmd != nil {
-			log.Printf("Executing docker compose %s for stack: %s", actionName, stackName)
-
-			// Stream the output (headers already set above)
-			if err := streamCommandOutput(w, cmd); err != nil {
-				log.Printf("Error executing docker compose %s for stack %s: %v", actionName, stackName, err)
-				// Error already written to response stream
-				return
-			}
-			log.Printf("Successfully executed docker compose %s for stack %s", actionName, stackName)
-			// Response already sent via streaming, so return early
-			return
-		}
+		log.Printf("Successfully persisted stack: %s (original: %s, effective: %s)", stackName, originalFilePath, effectiveFilePath)
 	}
-	w.Header().Set("Content-Type", "application/yaml")
-	w.WriteHeader(http.StatusOK)
-	w.Write(enrichedSanitizedYAML)
+}
+
+func serializeYamlWithPlainTextSecrets(w http.ResponseWriter, modifiedComposeFile ComposeFile) (strings.Builder, string, bool) {
+	// Replace environment variables in the effective YAML content
+	if err := replaceEnvVarsInCompose(&modifiedComposeFile); err != nil {
+		log.Printf("Error replacing environment variables in modifiedComposeFile file: %v", err)
+		fmt.Fprintf(w, "[ERROR] Failed to process modifiedComposeFile file: %v\n", err)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		return strings.Builder{}, "", true
+	}
+	var modifiedComposeYamlWithPlainTextSecretsBuffer strings.Builder
+	if err := encodeYAMLWithMultiline(&modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeFile); err != nil {
+		log.Printf("Failed to serialize modified YAML with secrets: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to serialize modified YAML with secrets: %v", err), http.StatusInternalServerError)
+		return strings.Builder{}, "", true
+	}
+	var modifiedComposeYamlWithPlainTextSecrets = modifiedComposeYamlWithPlainTextSecretsBuffer.String()
+	return modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, false
 }
 
 // ensureNetworksExist checks all networks defined in the compose file and creates missing ones
@@ -1890,9 +2015,9 @@ func HandleEnrichStack(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract stack name from URL path
-	// Expected format: /api/stacks/{name}/enrich
+	// Expected format: /api/enrich/{name}
 	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	if len(pathParts) < 3 || pathParts[0] != "api" || pathParts[1] != "stacks" {
+	if len(pathParts) < 3 || pathParts[0] != "api" || pathParts[1] != "enrich" {
 		http.Error(w, "Invalid URL format", http.StatusBadRequest)
 		return
 	}
@@ -1903,42 +2028,7 @@ func HandleEnrichStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read the request body
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		log.Printf("Error reading request body: %v", err)
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	// Validate YAML syntax before processing
-	var testCompose ComposeFile
-	if err := yaml.Unmarshal(body, &testCompose); err != nil {
-		log.Printf("Invalid YAML syntax for stack %s: %v", stackName, err)
-		http.Error(w, fmt.Sprintf("Invalid YAML syntax: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	// Validate that services section exists
-	if testCompose.Services == nil || len(testCompose.Services) == 0 {
-		log.Printf("No services defined in stack %s", stackName)
-		http.Error(w, "Invalid compose file: no services defined", http.StatusBadRequest)
-		return
-	}
-
-	// Enrich the YAML without modifying files or creating secrets
-	enrichedYAML, err := enrichComposeWithoutSideEffects(body)
-	if err != nil {
-		log.Printf("Error enriching compose file: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to process compose file: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	log.Printf("Successfully enriched stack YAML for: %s (no files modified)", stackName)
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	w.Write(enrichedYAML)
+	HandleDockerComposeFile(w, r, stackName, true, ComposeActionNone)
 }
 
 // addUndeclaredNetworksAndVolumes analyzes services and adds any undeclared networks and volumes
@@ -2469,15 +2559,9 @@ func ensureSecretsInProdEnv(secretNames []string) error {
 	return nil
 }
 
-// replaceEnvVarsInYAML reads a YAML file, replaces all ${VAR} placeholders with values from prod.env,
-// and returns the processed content as a string
-func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
-	// Read the YAML file
-	yamlContent, err := os.ReadFile(yamlFilePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read YAML file: %w", err)
-	}
-
+// replaceEnvVarsInCompose replaces ${VAR} and $VAR placeholders within a ComposeFile struct
+// It modifies the struct in-place and returns the marshaled YAML string with replacements applied.
+func replaceEnvVarsInCompose(compose *ComposeFile) error {
 	// Read prod.env
 	envVars, err := readProdEnv(ProdEnvPath)
 	if err != nil {
@@ -2485,724 +2569,236 @@ func replaceEnvVarsInYAML(yamlFilePath string) (string, error) {
 		envVars = make(map[string]string)
 	}
 
-	// Convert to string for replacement
-	content := string(yamlContent)
-
-	// Track undefined variables
 	undefinedVars := make(map[string]bool)
 
-	// Replace all ${VAR} and $VAR patterns with actual values
-	// First handle ${VAR} format
-	re := regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
-	content = re.ReplaceAllStringFunc(content, func(match string) string {
-		// Extract variable name from ${VAR}
-		varName := match[2 : len(match)-1]
-		// Check if this is a sensitive variable - if so, only use prod.env
-		if isSensitiveEnvironmentKey(varName, "") {
-			// For sensitive variables (passwords), only check prod.env, never runtime environment
-			if value, exists := envVars[varName]; exists {
-				return value
-			}
-			log.Printf("Error: Sensitive variable %s not found in prod.env", varName)
-			undefinedVars[varName] = true
-			return "" // Replace with empty string if not found
+	// Helper to replace variables in a single string
+	replaceInString := func(s string) string {
+		if s == "" {
+			return s
 		}
-		// For non-sensitive variables, check runtime environment first, then prod.env
-		if runtimeValue := os.Getenv(varName); runtimeValue != "" {
-			return runtimeValue
-		}
-		if value, exists := envVars[varName]; exists {
-			return value
-		}
-		// If variable not found, track it as undefined
-		log.Printf("Error: Environment variable %s not found in runtime or prod.env", varName)
-		undefinedVars[varName] = true
-		return "" // Replace with empty string if not found
-	})
 
-	// Then handle $VAR format (but not if followed by { or already handled)
-	// This is a simpler approach - only replace $VAR when it's clearly a standalone variable
-	re2 := regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)(?:[^A-Za-z0-9_]|$)`)
-	content = re2.ReplaceAllStringFunc(content, func(match string) string {
-		// Extract variable name and the trailing character
-		varName := match[1:]
-		trailingChar := ""
-		if len(varName) > 0 && !regexp.MustCompile(`[A-Za-z0-9_]`).MatchString(string(varName[len(varName)-1])) {
-			trailingChar = string(varName[len(varName)-1])
-			varName = varName[:len(varName)-1]
-		}
-		// Check if this is a sensitive variable - if so, only use prod.env
-		if isSensitiveEnvironmentKey(varName, "") {
-			// For sensitive variables (passwords), only check prod.env, never runtime environment
-			if value, exists := envVars[varName]; exists {
-				return value + trailingChar
+		// Handle ${VAR}
+		re := regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+		s = re.ReplaceAllStringFunc(s, func(match string) string {
+			varName := match[2 : len(match)-1]
+			if isSensitiveEnvironmentKey(varName, "") {
+				if v, ok := envVars[varName]; ok {
+					return v
+				}
+				undefinedVars[varName] = true
+				return ""
 			}
-			log.Printf("Error: Sensitive variable %s not found in prod.env", varName)
+			if runtimeValue := os.Getenv(varName); runtimeValue != "" {
+				return runtimeValue
+			}
+			if v, ok := envVars[varName]; ok {
+				return v
+			}
 			undefinedVars[varName] = true
-			return trailingChar // Return just the trailing char if variable not found
-		}
-		// For non-sensitive variables, check runtime environment first, then prod.env
-		if runtimeValue := os.Getenv(varName); runtimeValue != "" {
-			return runtimeValue + trailingChar
-		}
-		if value, exists := envVars[varName]; exists {
-			return value + trailingChar
-		}
-		log.Printf("Error: Environment variable %s not found in runtime or prod.env", varName)
-		undefinedVars[varName] = true
-		return trailingChar // Return just the trailing char if variable not found
-	})
+			return ""
+		})
 
-	// If there are undefined variables, return an error
+		// Handle $VAR (simple form)
+		re2 := regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)(?:[^A-Za-z0-9_]|$)`)
+		s = re2.ReplaceAllStringFunc(s, func(match string) string {
+			// Extract variable name and trailing char if present
+			varName := match[1:]
+			trailing := ""
+			if len(varName) > 0 && !regexp.MustCompile(`[A-Za-z0-9_]`).MatchString(string(varName[len(varName)-1])) {
+				trailing = string(varName[len(varName)-1])
+				varName = varName[:len(varName)-1]
+			}
+			if isSensitiveEnvironmentKey(varName, "") {
+				if v, ok := envVars[varName]; ok {
+					return v + trailing
+				}
+				undefinedVars[varName] = true
+				return trailing
+			}
+			if runtimeValue := os.Getenv(varName); runtimeValue != "" {
+				return runtimeValue + trailing
+			}
+			if v, ok := envVars[varName]; ok {
+				return v + trailing
+			}
+			undefinedVars[varName] = true
+			return trailing
+		})
+
+		return s
+	}
+
+	// Process services
+	for _, service := range compose.Services {
+		// Simple string fields
+		service.Image = replaceInString(service.Image)
+		service.ContainerName = replaceInString(service.ContainerName)
+		service.User = replaceInString(service.User)
+		service.Restart = replaceInString(service.Restart)
+
+		// Volumes
+		for i, vol := range service.Volumes {
+			service.Volumes[i] = replaceInString(vol)
+		}
+
+		// Ports
+		for i, p := range service.Ports {
+			service.Ports[i] = replaceInString(p)
+		}
+
+		// Environment: map or array
+		if service.Environment != nil {
+			if envMap, ok := service.Environment.(map[string]interface{}); ok {
+				for k, v := range envMap {
+					if strValue, ok := v.(string); ok {
+						envMap[k] = replaceInString(strValue)
+					}
+				}
+				service.Environment = envMap
+			} else if envArr, ok := service.Environment.([]interface{}); ok {
+				for i, item := range envArr {
+					if s, ok := item.(string); ok {
+						// If it's KEY=VALUE, only replace VALUE portion
+						if eq := strings.Index(s, "="); eq != -1 {
+							key := s[:eq]
+							val := s[eq+1:]
+							envArr[i] = fmt.Sprintf("%s=%s", key, replaceInString(val))
+						} else {
+							envArr[i] = replaceInString(s)
+						}
+					}
+				}
+				service.Environment = envArr
+			}
+		}
+
+		// Networks (array form)
+		if service.Networks != nil {
+			if netArr, ok := service.Networks.([]interface{}); ok {
+				for i, item := range netArr {
+					if s, ok := item.(string); ok {
+						netArr[i] = replaceInString(s)
+					}
+				}
+				service.Networks = netArr
+			}
+		}
+
+		// Labels map or array
+		if service.Labels != nil {
+			if labMap, ok := service.Labels.(map[string]interface{}); ok {
+				for k, v := range labMap {
+					if str, ok := v.(string); ok {
+						labMap[k] = replaceInString(str)
+					}
+				}
+				service.Labels = labMap
+			} else if labArr, ok := service.Labels.([]interface{}); ok {
+				for i, item := range labArr {
+					if s, ok := item.(string); ok {
+						labArr[i] = replaceInString(s)
+					}
+				}
+				service.Labels = labArr
+			}
+		}
+
+		// Command
+		if service.Command != nil {
+			if cmdStr, ok := service.Command.(string); ok {
+				service.Command = replaceInString(cmdStr)
+			} else if cmdArr, ok := service.Command.([]interface{}); ok {
+				for i, item := range cmdArr {
+					if s, ok := item.(string); ok {
+						cmdArr[i] = replaceInString(s)
+					}
+				}
+				service.Command = cmdArr
+			}
+		}
+
+		// Configs
+		for i := range service.Configs {
+			service.Configs[i].Source = replaceInString(service.Configs[i].Source)
+			service.Configs[i].Target = replaceInString(service.Configs[i].Target)
+		}
+
+		// Sysctls
+		if service.Sysctls != nil {
+			if sMap, ok := service.Sysctls.(map[string]interface{}); ok {
+				for k, v := range sMap {
+					if str, ok := v.(string); ok {
+						sMap[k] = replaceInString(str)
+					}
+				}
+				service.Sysctls = sMap
+			} else if sArr, ok := service.Sysctls.([]interface{}); ok {
+				for i, item := range sArr {
+					if s, ok := item.(string); ok {
+						sArr[i] = replaceInString(s)
+					}
+				}
+				service.Sysctls = sArr
+			}
+		}
+
+		// Secrets
+		for i, s := range service.Secrets {
+			service.Secrets[i] = replaceInString(s)
+		}
+
+		// Logging options
+		if service.Logging != nil && service.Logging.Options != nil {
+			for k, v := range service.Logging.Options {
+				service.Logging.Options[k] = replaceInString(v)
+			}
+		}
+	}
+
+	// Volumes
+	for name, vol := range compose.Volumes {
+		vol.Name = replaceInString(vol.Name)
+		vol.Driver = replaceInString(vol.Driver)
+		for k, v := range vol.DriverOpts {
+			vol.DriverOpts[k] = replaceInString(v)
+		}
+		compose.Volumes[name] = vol
+	}
+
+	// Networks
+	for name, net := range compose.Networks {
+		net.Driver = replaceInString(net.Driver)
+		for k, v := range net.DriverOpts {
+			net.DriverOpts[k] = replaceInString(v)
+		}
+		compose.Networks[name] = net
+	}
+
+	// Configs
+	for name, cfg := range compose.Configs {
+		cfg.Content = replaceInString(cfg.Content)
+		cfg.File = replaceInString(cfg.File)
+		compose.Configs[name] = cfg
+	}
+
+	// Secrets
+	for name, s := range compose.Secrets {
+		s.Name = replaceInString(s.Name)
+		s.Environment = replaceInString(s.Environment)
+		s.File = replaceInString(s.File)
+		compose.Secrets[name] = s
+	}
+
 	if len(undefinedVars) > 0 {
 		varList := make([]string, 0, len(undefinedVars))
 		for varName := range undefinedVars {
 			varList = append(varList, varName)
 		}
 		sort.Strings(varList)
-		return "", fmt.Errorf("undefined variables: %s", strings.Join(varList, ", "))
-	}
-
-	return content, nil
-}
-
-// setEnvFromProdEnv loads environment variables from prod.env and sets them on the command
-// DEPRECATED: This function is no longer used. We now replace variables directly in YAML and pipe to docker compose.
-func setEnvFromProdEnv(cmd *exec.Cmd) error {
-	// Read prod.env
-	envVars, err := readProdEnv(ProdEnvPath)
-	if err != nil {
-		log.Printf("Warning: Failed to read prod.env: %v", err)
-		// Continue with current environment
-		cmd.Env = os.Environ()
-		return nil
-	}
-
-	// Start with current environment
-	cmd.Env = os.Environ()
-
-	// Add/override with prod.env variables
-	for key, value := range envVars {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+		return fmt.Errorf("undefined variables: %s", strings.Join(varList, ", "))
 	}
 
 	return nil
-}
-
-// enrichComposeWithoutSideEffects enriches a docker-compose YAML with Traefik labels,
-// networks, volumes, secrets, etc. but does NOT modify files on disk or create secrets in prod.env
-func enrichComposeWithoutSideEffects(yamlContent []byte) ([]byte, error) {
-	// Parse the YAML
-	var compose ComposeFile
-	if err := yaml.Unmarshal(yamlContent, &compose); err != nil {
-		return nil, fmt.Errorf("failed to parse YAML: %w", err)
-	}
-
-	// Process secrets without side effects (no prod.env modification)
-	processSecrets(&compose, true)
-
-	// Enrich each service with Traefik labels and other auto-additions
-	enrichServices(&compose)
-
-	// Marshal back to YAML with multiline string support
-	var buf strings.Builder
-	if err := encodeYAMLWithMultiline(&buf, compose); err != nil {
-		return nil, err
-	}
-
-	return []byte(buf.String()), nil
-}
-
-// detectHTTPPort detects HTTP/HTTPS ports from service configuration
-// Returns: detectedPort, isHTTPS, found
-func detectHTTPPort(service ComposeService) (string, bool, bool) {
-	httpsOnlyPorts := []string{"443", "8443"}
-	httpPorts := []string{"80", "8080", "3000", "4200", "5000", "8000", "8081", "8888", "9000"}
-	standardHTTPPorts := append(httpPorts, httpsOnlyPorts...)
-
-	detectedPort := ""
-	isHTTPS := false
-
-	// Check in port declarations
-	for _, portMapping := range service.Ports {
-		parts := strings.Split(portMapping, ":")
-		var containerPort string
-		if len(parts) > 1 {
-			containerPort = strings.Split(parts[len(parts)-1], "/")[0] // Remove /tcp or /udp if present
-		} else {
-			containerPort = strings.Split(parts[0], "/")[0]
-		}
-
-		// Check if it's an HTTPS port
-		for _, httpsPort := range httpsOnlyPorts {
-			if containerPort == httpsPort {
-				isHTTPS = true
-				detectedPort = containerPort
-				return detectedPort, isHTTPS, true
-			}
-		}
-
-		// Check if it's a common HTTP port
-		for _, httpPort := range httpPorts {
-			if containerPort == httpPort {
-				detectedPort = containerPort
-				return detectedPort, isHTTPS, true
-			}
-		}
-	}
-
-	// Check in environment variables if port not found yet
-	if service.Environment != nil {
-		envArray := normalizeEnvironment(service.Environment)
-		for _, env := range envArray {
-			envUpper := strings.ToUpper(env)
-			for _, httpPort := range standardHTTPPorts {
-				if strings.Contains(envUpper, "PORT="+httpPort) ||
-					strings.Contains(envUpper, "PORT:"+httpPort) ||
-					strings.Contains(envUpper, ":"+httpPort) {
-					detectedPort = httpPort
-					// Check if it's HTTPS
-					for _, httpsPort := range httpsOnlyPorts {
-						if httpPort == httpsPort {
-							isHTTPS = true
-							break
-						}
-					}
-					return detectedPort, isHTTPS, true
-				}
-			}
-		}
-	}
-
-	return "", false, false
-}
-
-// generateTraefikLabels generates the standard Traefik labels for a service
-func generateTraefikLabels(serviceName string, port string, scheme string) map[string]string {
-	return map[string]string{
-		"traefik.enable": "true",
-		"traefik.http.routers." + serviceName + ".entrypoints":                 "https",
-		"traefik.http.routers." + serviceName + ".rule":                        fmt.Sprintf("Host(`%s.localhost`) || Host(`%s.${PUBLIC_DOMAIN_NAME}`) || Host(`%s`)", serviceName, serviceName, serviceName),
-		"traefik.http.routers." + serviceName + ".service":                     serviceName,
-		"traefik.http.routers." + serviceName + ".tls":                         "true",
-		"traefik.http.services." + serviceName + ".loadbalancer.server.port":   port,
-		"traefik.http.services." + serviceName + ".loadbalancer.server.scheme": scheme,
-	}
-}
-
-// addTraefikLabels adds Traefik labels to a labels map if they don't already exist
-// Returns true if any labels were added
-func addTraefikLabels(labelsMap map[string]string, serviceName string, port string, scheme string) bool {
-	traefikLabels := generateTraefikLabels(serviceName, port, scheme)
-
-	added := false
-	// Only add labels that don't already exist
-	for key, value := range traefikLabels {
-		if _, exists := labelsMap[key]; !exists {
-			labelsMap[key] = value
-			added = true
-		}
-	}
-
-	return added
-}
-
-// addTraefikLabelsInterface adds Traefik labels to a labels map[string]interface{} if they don't already exist
-// Returns true if any labels were added
-func addTraefikLabelsInterface(labelsMap map[string]interface{}, serviceName string, port string, scheme string) bool {
-	traefikLabels := generateTraefikLabels(serviceName, port, scheme)
-
-	added := false
-	// Only add labels that don't already exist
-	for key, value := range traefikLabels {
-		if _, exists := labelsMap[key]; !exists {
-			labelsMap[key] = value
-			added = true
-		}
-	}
-
-	return added
-}
-
-// enrichServices enriches all services in a compose file with Traefik labels,
-// networks, volumes, sysctls, capabilities, timezone mounts, etc.
-func enrichServices(compose *ComposeFile) {
-	// Enrich each service with Traefik labels
-	for serviceName, service := range compose.Services {
-		// Convert labels to map if needed
-		labelsMap := make(map[string]string)
-
-		if service.Labels != nil {
-			switch v := service.Labels.(type) {
-			case []interface{}:
-				// Labels as array of strings
-				for _, label := range v {
-					if labelStr, ok := label.(string); ok {
-						if parts := strings.SplitN(labelStr, "=", 2); len(parts) == 2 {
-							labelsMap[parts[0]] = parts[1]
-						}
-					}
-				}
-			case map[string]interface{}:
-				// Labels as map
-				for k, val := range v {
-					if valStr, ok := val.(string); ok {
-						labelsMap[k] = valStr
-					}
-				}
-			}
-		}
-
-		// Check if any Traefik labels are present
-		hasTraefikLabels := false
-		for key := range labelsMap {
-			if strings.HasPrefix(key, "traefik.") {
-				hasTraefikLabels = true
-				break
-			}
-		}
-
-		// If any Traefik label is used, automatically add traefik.enable=true
-		if hasTraefikLabels {
-			if _, exists := labelsMap["traefik.enable"]; !exists {
-				labelsMap["traefik.enable"] = "true"
-				log.Printf("Auto-added traefik.enable=true for service %s", serviceName)
-			}
-		}
-
-		// Handle custom https.port and http.port labels
-		var customPort string
-		var customScheme string
-
-		// Check for https.port=XXXX label
-		if httpsPort, exists := labelsMap["https.port"]; exists {
-			customPort = httpsPort
-			customScheme = "https"
-			delete(labelsMap, "https.port") // Remove from effective YAML
-			log.Printf("Detected https.port=%s for service %s, adding Traefik labels", httpsPort, serviceName)
-		} else if httpPort, exists := labelsMap["http.port"]; exists {
-			// Check for http.port=XXXX label
-			customPort = httpPort
-			customScheme = "http"
-			delete(labelsMap, "http.port") // Remove from effective YAML
-			log.Printf("Detected http.port=%s for service %s, adding Traefik labels", httpPort, serviceName)
-		}
-
-		// If custom port labels were found, add Traefik labels
-		if customPort != "" {
-			addTraefikLabels(labelsMap, serviceName, customPort, customScheme)
-		} else if hasTraefikLabels {
-			// Only auto-add Traefik configuration if the service already has Traefik labels
-			// Detect port from service configuration
-			detectedPort, isHTTPS, found := detectHTTPPort(service)
-
-			// Only add full Traefik configuration if we detected an HTTP/HTTPS port
-			if found && detectedPort != "" {
-				scheme := "http"
-				if isHTTPS {
-					scheme = "https"
-				}
-				addTraefikLabels(labelsMap, serviceName, detectedPort, scheme)
-			}
-		}
-
-		// Convert back to array format for consistency with docker-compose
-		var labelsArray []string
-		for key, value := range labelsMap {
-			labelsArray = append(labelsArray, fmt.Sprintf("%s=%s", key, value))
-		}
-
-		// Sort labels for consistent output
-		sort.Strings(labelsArray)
-
-		service.Labels = labelsArray
-
-		// Check for privileged ports and add necessary capabilities
-		lowestPrivilegedPort := getLowestPrivilegedPort(service, labelsMap, compose.Configs)
-		if lowestPrivilegedPort > 0 {
-			// Add NET_BIND_SERVICE capability if not already present
-			hasCapAdd := false
-			for _, capability := range service.CapAdd {
-				if capability == "NET_BIND_SERVICE" {
-					hasCapAdd = true
-					break
-				}
-			}
-
-			if !hasCapAdd {
-				service.CapAdd = append(service.CapAdd, "NET_BIND_SERVICE")
-				log.Printf("Auto-added NET_BIND_SERVICE capability for service %s due to privileged port %d detection", serviceName, lowestPrivilegedPort)
-			}
-
-			// Add sysctls for unprivileged port start
-			sysctlsMap := make(map[string]string)
-
-			// Parse existing sysctls if present
-			if service.Sysctls != nil {
-				switch v := service.Sysctls.(type) {
-				case []interface{}:
-					// Sysctls as array of strings
-					for _, sysctl := range v {
-						if sysctlStr, ok := sysctl.(string); ok {
-							if parts := strings.SplitN(sysctlStr, "=", 2); len(parts) == 2 {
-								sysctlsMap[parts[0]] = parts[1]
-							}
-						}
-					}
-				case map[string]interface{}:
-					// Sysctls as map
-					for k, val := range v {
-						if valStr, ok := val.(string); ok {
-							sysctlsMap[k] = valStr
-						}
-					}
-				}
-			}
-
-			// Add required sysctls if not present
-			if _, exists := sysctlsMap["net.ipv4.ip_unprivileged_port_start"]; !exists {
-				sysctlsMap["net.ipv4.ip_unprivileged_port_start"] = fmt.Sprintf("%d", lowestPrivilegedPort)
-				log.Printf("Auto-added net.ipv4.ip_unprivileged_port_start=%d sysctl for service %s", lowestPrivilegedPort, serviceName)
-			}
-
-			// Convert sysctls to array format
-			var sysctlsArray []string
-			for key, value := range sysctlsMap {
-				sysctlsArray = append(sysctlsArray, fmt.Sprintf("%s=%s", key, value))
-			}
-			sort.Strings(sysctlsArray)
-			service.Sysctls = sysctlsArray
-		}
-
-		// Automatically add homelab network if not present
-		hasHomelabNetwork := false
-		networksList := []string{}
-
-		// Parse existing networks
-		if service.Networks != nil {
-			switch v := service.Networks.(type) {
-			case []interface{}:
-				// Networks as array
-				for _, net := range v {
-					if netStr, ok := net.(string); ok {
-						networksList = append(networksList, netStr)
-						if netStr == "homelab" {
-							hasHomelabNetwork = true
-						}
-					}
-				}
-			case []string:
-				// Networks as string array
-				for _, netStr := range v {
-					networksList = append(networksList, netStr)
-					if netStr == "homelab" {
-						hasHomelabNetwork = true
-					}
-				}
-			case map[string]interface{}:
-				// Networks as map
-				for netName := range v {
-					networksList = append(networksList, netName)
-					if netName == "homelab" {
-						hasHomelabNetwork = true
-					}
-				}
-			case string:
-				// Single network as string
-				networksList = append(networksList, v)
-				if v == "homelab" {
-					hasHomelabNetwork = true
-				}
-			}
-		}
-
-		// Add homelab network if not present
-		if !hasHomelabNetwork {
-			networksList = append(networksList, "homelab")
-			log.Printf("Auto-added homelab network to service %s", serviceName)
-		}
-
-		// Update service networks
-		if len(networksList) > 0 {
-			service.Networks = networksList
-		}
-
-		// Add all referenced networks to top-level networks definition with external: true
-		if compose.Networks == nil {
-			compose.Networks = make(map[string]ComposeNetwork)
-		}
-		for _, networkName := range networksList {
-			if _, exists := compose.Networks[networkName]; !exists {
-				compose.Networks[networkName] = ComposeNetwork{External: true}
-				log.Printf("Auto-added network %s to top-level networks (marked as external) for service %s", networkName, serviceName)
-			}
-		}
-
-		// Automatically add timezone mounts if files exist on host and not already mounted
-		timezoneMounts := []string{
-			"/etc/localtime:/etc/localtime:ro",
-			"/etc/timezone:/etc/timezone:ro",
-		}
-
-		for _, mount := range timezoneMounts {
-			// Extract the host path (first part before colon)
-			mountParts := strings.Split(mount, ":")
-			if len(mountParts) < 2 {
-				continue
-			}
-			hostPath := mountParts[0]
-			containerPath := mountParts[1]
-
-			// Check if file exists on host
-			if _, err := os.Stat(hostPath); err == nil {
-				// File exists, check if it's already in volumes
-				alreadyMounted := false
-
-				for _, existingVolume := range service.Volumes {
-					// Check if this source or target path is already mounted
-					volumeParts := strings.Split(existingVolume, ":")
-					if len(volumeParts) >= 2 {
-						existingSource := volumeParts[0]
-						existingTarget := volumeParts[1]
-
-						// Check if either the source or target matches
-						if existingSource == hostPath || existingTarget == containerPath {
-							alreadyMounted = true
-							break
-						}
-					}
-				}
-
-				if !alreadyMounted {
-					service.Volumes = append(service.Volumes, mount)
-					log.Printf("Auto-added timezone mount %s to service %s", mount, serviceName)
-				}
-			}
-		}
-
-		// Automatically add TZ environment variable if not already set
-		hasTZ := false
-		envArray := normalizeEnvironment(service.Environment)
-		for _, env := range envArray {
-			// Check if TZ is already defined
-			if strings.HasPrefix(env, "TZ=") {
-				hasTZ = true
-				break
-			}
-		}
-
-		if !hasTZ {
-			envArray = append(envArray, "TZ=${TZ}")
-			setEnvironmentAsArray(&service, envArray)
-			log.Printf("Auto-added TZ=${TZ} environment variable to service %s", serviceName)
-		}
-
-		// Automatically set container_name based on image if not already defined
-		if service.ContainerName == "" && service.Image != "" {
-			// Extract container name from image
-			// Examples:
-			// "nginx:latest" -> "nginx"
-			// "docker.io/library/nginx:latest" -> "nginx"
-			// "ghcr.io/owner/repo:tag" -> "repo"
-			// "registry.example.com:5000/path/to/image:version" -> "image"
-
-			imageName := service.Image
-
-			// Remove registry prefix (anything before the last /)
-			parts := strings.Split(imageName, "/")
-			imageName = parts[len(parts)-1]
-
-			// Remove version/tag (anything after :)
-			imageName = strings.Split(imageName, ":")[0]
-
-			// Remove @sha256 digest if present
-			imageName = strings.Split(imageName, "@")[0]
-
-			if imageName != "" {
-				service.ContainerName = imageName
-				log.Printf("Auto-set container_name=%s for service %s based on image %s", imageName, serviceName, service.Image)
-			}
-		}
-
-		// Add default resource limits if not specified
-		if service.MemLimit == "" {
-			service.MemLimit = "256m"
-			log.Printf("Auto-set mem_limit=256m for service %s", serviceName)
-		}
-
-		if service.MemswapLimit == 0 {
-			service.MemswapLimit = 0
-			log.Printf("Auto-set memswap_limit=0 for service %s", serviceName)
-		}
-
-		if service.CPUs == nil {
-			service.CPUs = "0.5"
-			log.Printf("Auto-set cpus=0.5 for service %s", serviceName)
-		}
-
-		// Add default logging configuration if not specified
-		if service.Logging == nil {
-			service.Logging = &LoggingConfig{
-				Driver: "json-file",
-				Options: map[string]string{
-					"max-size": "10m",
-					"max-file": "3",
-				},
-			}
-			log.Printf("Auto-set logging driver=json-file with max-size=10m and max-file=3 for service %s", serviceName)
-		} else if service.Logging.Driver == "json-file" {
-			// If driver is json-file but options are missing, fill in the defaults
-			if service.Logging.Options == nil {
-				service.Logging.Options = make(map[string]string)
-			}
-			if _, exists := service.Logging.Options["max-size"]; !exists {
-				service.Logging.Options["max-size"] = "10m"
-				log.Printf("Auto-set logging max-size=10m for service %s", serviceName)
-			}
-			if _, exists := service.Logging.Options["max-file"]; !exists {
-				service.Logging.Options["max-file"] = "3"
-				log.Printf("Auto-set logging max-file=3 for service %s", serviceName)
-			}
-		}
-
-		compose.Services[serviceName] = service
-	}
-
-	// Add undeclared networks and volumes
-	addUndeclaredNetworksAndVolumes(compose)
-}
-
-// getDockerSocketPath returns the appropriate Docker socket path
-// Checks if /run/user/<UID>/docker.sock exists, otherwise returns /run/user/1000/docker.sock
-func getDockerSocketPath() string {
-	// Get the current user's UID
-	uid := os.Getuid()
-	userSocket := fmt.Sprintf("/run/user/%d/docker.sock", uid)
-
-	// Check if user-specific socket exists
-	if _, err := os.Stat(userSocket); err == nil {
-		return userSocket
-	}
-
-	// Fallback to default rootless socket (UID 1000)
-	return "/run/user/1000/docker.sock"
-}
-
-// getCurrentUserID returns the current user's UID as a string
-func getCurrentUserID() string {
-	return fmt.Sprintf("%d", os.Getuid())
-}
-
-// getCurrentGroupID returns the current user's GID as a string
-func getCurrentGroupID() string {
-	return fmt.Sprintf("%d", os.Getgid())
-}
-
-// replacePlaceholders replaces DOCKER_SOCK, DOCKER_SOCKET, USER_ID, and USER_GID placeholders with the appropriate values
-// Handles both literal strings and environment variable syntax (${VAR}, $VAR)
-func replacePlaceholders(compose *ComposeFile) {
-	dockerSocket := getDockerSocketPath()
-	userID := getCurrentUserID()
-	groupID := getCurrentGroupID()
-
-	// Process each service
-	for serviceName, service := range compose.Services {
-		// Replace in volumes
-		if len(service.Volumes) > 0 {
-			for i, volume := range service.Volumes {
-				// Replace both literal and environment variable syntax
-				volume = strings.ReplaceAll(volume, "${DOCKER_SOCK}", dockerSocket)
-				volume = strings.ReplaceAll(volume, "${DOCKER_SOCKET}", dockerSocket)
-				volume = strings.ReplaceAll(volume, "$DOCKER_SOCK", dockerSocket)
-				volume = strings.ReplaceAll(volume, "$DOCKER_SOCKET", dockerSocket)
-				volume = strings.ReplaceAll(volume, "${USER_ID}", userID)
-				volume = strings.ReplaceAll(volume, "$USER_ID", userID)
-				volume = strings.ReplaceAll(volume, "${USERID}", userID)
-				volume = strings.ReplaceAll(volume, "$USERID", userID)
-				volume = strings.ReplaceAll(volume, "${USER_GID}", groupID)
-				volume = strings.ReplaceAll(volume, "$USER_GID", groupID)
-				volume = strings.ReplaceAll(volume, "${USERGID}", groupID)
-				volume = strings.ReplaceAll(volume, "$USERGID", groupID)
-				volume = strings.ReplaceAll(volume, "${UID}", groupID)
-				volume = strings.ReplaceAll(volume, "$UID", groupID)
-				volume = strings.ReplaceAll(volume, "${GID}", groupID)
-				volume = strings.ReplaceAll(volume, "$GID", groupID)
-				service.Volumes[i] = volume
-			}
-		}
-
-		// Replace in environment variables
-		if service.Environment != nil {
-			// Handle map format
-			if envMap, ok := service.Environment.(map[string]interface{}); ok {
-				for key, value := range envMap {
-					if strValue, ok := value.(string); ok {
-						strValue = strings.ReplaceAll(strValue, "${DOCKER_SOCK}", dockerSocket)
-						strValue = strings.ReplaceAll(strValue, "${DOCKER_SOCKET}", dockerSocket)
-						strValue = strings.ReplaceAll(strValue, "$DOCKER_SOCK", dockerSocket)
-						strValue = strings.ReplaceAll(strValue, "$DOCKER_SOCKET", dockerSocket)
-						strValue = strings.ReplaceAll(strValue, "${USER_ID}", userID)
-						strValue = strings.ReplaceAll(strValue, "$USER_ID", userID)
-						strValue = strings.ReplaceAll(strValue, "${USER_GID}", groupID)
-						strValue = strings.ReplaceAll(strValue, "$USER_GID", groupID)
-						envMap[key] = strValue
-					}
-				}
-			}
-			// Handle array format
-			if envArray, ok := service.Environment.([]interface{}); ok {
-				for i, item := range envArray {
-					if strValue, ok := item.(string); ok {
-						strValue = strings.ReplaceAll(strValue, "${DOCKER_SOCK}", dockerSocket)
-						strValue = strings.ReplaceAll(strValue, "${DOCKER_SOCKET}", dockerSocket)
-						strValue = strings.ReplaceAll(strValue, "$DOCKER_SOCK", dockerSocket)
-						strValue = strings.ReplaceAll(strValue, "$DOCKER_SOCKET", dockerSocket)
-						strValue = strings.ReplaceAll(strValue, "${USER_ID}", userID)
-						strValue = strings.ReplaceAll(strValue, "$USER_ID", userID)
-						strValue = strings.ReplaceAll(strValue, "${USER_GID}", groupID)
-						strValue = strings.ReplaceAll(strValue, "$USER_GID", groupID)
-						envArray[i] = strValue
-					}
-				}
-			}
-		}
-
-		// Update the service back to the map
-		compose.Services[serviceName] = service
-	}
-
-	log.Printf("Replaced placeholders - DOCKER_SOCK/DOCKER_SOCKET: %s, USER_ID: %s, USER_GID: %s", dockerSocket, userID, groupID)
-}
-
-// enrichAndSanitizeCompose enriches and sanitizes a compose file
-// If dryRun is true, it will not write to prod.env or files
-// Returns the enriched and sanitized YAML
-func enrichAndSanitizeCompose(yamlContent []byte, dryRun bool) ([]byte, error) {
-	// Parse the YAML
-	var compose ComposeFile
-	if err := yaml.Unmarshal(yamlContent, &compose); err != nil {
-		return nil, fmt.Errorf("failed to parse YAML: %w", err)
-	}
-
-	// Process secrets with or without side effects based on dryRun
-	processSecrets(&compose, dryRun)
-
-	// Replace placeholders (DOCKER_SOCK, DOCKER_SOCKET, etc.)
-	replacePlaceholders(&compose)
-
-	// Enrich services
-	enrichServices(&compose)
-
-	// Sanitize passwords with or without extraction based on dryRun
-	sanitizeComposePasswords(&compose, dryRun)
-
-	// Marshal back to YAML with multiline string support
-	var buf strings.Builder
-	if err := encodeYAMLWithMultiline(&buf, compose); err != nil {
-		return nil, err
-	}
-
-	return []byte(buf.String()), nil
 }
 
 // HandleEnrichYAML handles PUT /api/enrich/{stackname} - enriches YAML without saving to prod.env or files
@@ -3247,71 +2843,7 @@ func HandleDeleteStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Deleting stack: %s", stackName)
-
-	// Get the effective compose file path
-	composeFile := getEffectiveComposeFile(stackName)
-
-	// Replace environment variables in the YAML content
-	yamlContent, err := replaceEnvVarsInYAML(composeFile)
-	if err != nil {
-		log.Printf("Error replacing environment variables in compose file: %v", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   fmt.Sprintf("Failed to process compose file: %v", err),
-		})
-		return
-	}
-
-	// Execute docker compose down command to remove all containers using piped YAML
-	cmd := exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down")
-	cmd.Stdin = strings.NewReader(yamlContent)
-
-	log.Printf("Executing docker compose down for stack: %s", stackName)
-
-	// Set up streaming headers
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Transfer-Encoding", "chunked")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-
-	// Stream the output using chunked encoding
-	if err := streamCommandOutput(w, cmd); err != nil {
-		log.Printf("Error deleting stack %s: %v", stackName, err)
-		// Error already written to response stream
-		return
-	}
-
-	log.Printf("Successfully deleted stack: %s", stackName)
-
-	// Delete both the original and effective stack YAML files
-	originalFilePath := GetStackPath(stackName, false)
-	effectiveFilePath := GetStackPath(stackName, true)
-
-	if err := os.Remove(originalFilePath); err != nil {
-		// Log warning but don't fail the operation since containers are already removed
-		log.Printf("Warning: Failed to delete original stack file %s: %v", originalFilePath, err)
-		fmt.Fprintf(w, "[WARN] Failed to delete original stack file: %v\n", err)
-	} else {
-		log.Printf("Deleted original stack file: %s", originalFilePath)
-		fmt.Fprintf(w, "[INFO] Deleted original stack file: %s\n", originalFilePath)
-	}
-
-	if err := os.Remove(effectiveFilePath); err != nil {
-		// Log warning but don't fail the operation
-		log.Printf("Warning: Failed to delete effective stack file %s: %v", effectiveFilePath, err)
-		fmt.Fprintf(w, "[WARN] Failed to delete effective stack file: %v\n", err)
-	} else {
-		log.Printf("Deleted effective stack file: %s", effectiveFilePath)
-		fmt.Fprintf(w, "[INFO] Deleted effective stack file: %s\n", effectiveFilePath)
-	}
-
-	fmt.Fprintf(w, "[DONE] Stack %s deleted successfully\n", stackName)
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
+	HandleDockerComposeFile(w, r, stackName, false, ComposeActionDown)
 }
 
 // getStacksData returns the combined stacks data (same as GET /api/stacks)
