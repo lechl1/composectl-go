@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -25,18 +26,26 @@ func NewStdoutResponseWriter() *StdoutResponseWriter {
 
 func (w *StdoutResponseWriter) Header() http.Header { return w.h }
 func (w *StdoutResponseWriter) WriteHeader(statusCode int) {
-	fmt.Fprintf(os.Stderr, "Status: %d\n", statusCode)
+
 }
-func (w *StdoutResponseWriter) Write(b []byte) (int, error) { return os.Stdout.Write(b) }
+func (w *StdoutResponseWriter) Write(b []byte) (int, error) { return 200, nil }
 func (w *StdoutResponseWriter) Flush()                      { _ = os.Stdout.Sync() }
-func (w *StdoutResponseWriter) WriteString(s string) (int, error) {
-	return io.WriteString(os.Stdout, s)
-}
-func (w *StdoutResponseWriter) WriteHeaderString(statusLine string) {
-	fmt.Fprintln(os.Stderr, statusLine)
-}
 
 func main() {
+	// Buffer all log output so that successful invocations (e.g. "dc stacks ls")
+	// produce clean stdout with no diagnostic noise. Logs are only flushed to
+	// stderr on failure via die().
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+
+	die := func(format string, args ...interface{}) {
+		if logBuf.Len() > 0 {
+			os.Stderr.Write(logBuf.Bytes())
+		}
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+		os.Exit(1)
+	}
+
 	// Initialize paths first (respects --stacks-dir and --env-path arguments)
 	InitPaths(os.Args)
 
@@ -47,8 +56,7 @@ func main() {
 
 	args := flag.Args()
 	if len(args) < 1 {
-		fmt.Fprintf(os.Stderr, "Usage: dc stack <command> [name]\nCommands: ls, start|up, stop, down, logs\n")
-		os.Exit(1)
+		die("Usage: dc stack <command> [name]\nCommands: ls, start|up, stop, down, logs")
 	}
 
 	writer := NewStdoutResponseWriter()
@@ -56,8 +64,7 @@ func main() {
 	switch args[0] {
 	case "stack", "stacks":
 		if len(args) < 2 {
-			fmt.Fprintf(os.Stderr, "Usage: dc stack <command> [name]\n")
-			os.Exit(1)
+			die("Usage: dc stack <command> [name]")
 		}
 		cmd := args[1]
 		switch cmd {
@@ -66,14 +73,12 @@ func main() {
 			HandleListStacks(writer, r)
 		case "start", "up":
 			if len(args) < 3 {
-				fmt.Fprintf(os.Stderr, "Usage: dc stack %s <name>\n", cmd)
-				os.Exit(1)
+				die("Usage: dc stack %s <name>", cmd)
 			}
 			name := args[2]
 			yamlBody, err := findYAML(name)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "%v\n", err)
-				os.Exit(1)
+				die("%v", err)
 			}
 			r := &http.Request{
 				Method: http.MethodPut,
@@ -83,38 +88,33 @@ func main() {
 			HandleStartStack(writer, r)
 		case "stop":
 			if len(args) < 3 {
-				fmt.Fprintf(os.Stderr, "Usage: dc stack stop <name>\n")
-				os.Exit(1)
+				die("Usage: dc stack stop <name>")
 			}
 			name := args[2]
 			r := &http.Request{Method: http.MethodPut, URL: &url.URL{Path: "/api/stacks/" + name + "/stop"}}
 			HandleStopStack(writer, r)
 		case "down", "rm", "remove":
 			if len(args) < 3 {
-				fmt.Fprintf(os.Stderr, "Usage: dc stack %s <name>\n", cmd)
-				os.Exit(1)
+				die("Usage: dc stack %s <name>", cmd)
 			}
 			name := args[2]
 			r := &http.Request{Method: http.MethodDelete, URL: &url.URL{Path: "/api/stacks/" + name}}
 			HandleDeleteStack(writer, r)
 		case "logs":
 			if len(args) < 3 {
-				fmt.Fprintf(os.Stderr, "Usage: dc stack logs <name>\n")
-				os.Exit(1)
+				die("Usage: dc stack logs <name>")
 			}
 			name := args[2]
 			r := &http.Request{Method: http.MethodGet, URL: &url.URL{Path: "/api/stacks/" + name + "/logs"}}
 			HandleStreamStackLogs(writer, r)
 		default:
-			fmt.Fprintf(os.Stderr, "Unknown stack command: %s\n", cmd)
-			os.Exit(1)
+			die("Unknown stack command: %s", cmd)
 		}
 
 	case "pw", "secret":
 		// Forward pw/secret commands to an external `pw` script which reads/writes the env store.
 		if len(args) < 2 {
-			fmt.Fprintf(os.Stderr, "Usage: dc %s <args...>\n", args[0])
-			os.Exit(1)
+			die("Usage: dc %s <args...>", args[0])
 		}
 		cmdArgs := args[1:]
 		// Normalize common long verbs to short aliases (insert/delete/update/upsert/get -> ins/del/upd/ups/get)
@@ -179,13 +179,11 @@ func main() {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "pw command failed: %v\n", err)
-			os.Exit(1)
+			die("pw command failed: %v", err)
 		}
 
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", args[0])
-		os.Exit(1)
+		die("Unknown command: %s", args[0])
 	}
 }
 

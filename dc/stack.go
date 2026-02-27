@@ -879,11 +879,6 @@ func reconstructComposeFromContainers(inspectData []DockerInspect) (string, erro
 	// Marshal to YAML with 2-space indentation and multiline string support
 	var buf strings.Builder
 
-	// Add disclaimer comment at the top
-	buf.WriteString("# This docker-compose.yml was automatically reconstructed from running and stopped containers.\n")
-	buf.WriteString("# Some settings may be incomplete or differ from the original configuration.\n")
-	buf.WriteString("# Please review and adjust as needed before using in production.\n")
-
 	if err := encodeYAMLWithMultiline(&buf, compose); err != nil {
 		return "", err
 	}
