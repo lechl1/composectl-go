@@ -10,21 +10,21 @@ set -euo pipefail
 # will avoid overwriting it.
 
 # Simple password store backed by a single env-style file.
-# Usage: pw insert <KEY>   -> reads password from stdin and stores KEY=value (fails if KEY exists)
-#        pw update <KEY>   -> reads password from stdin and updates KEY (fails if KEY missing)
-#        pw generate <KEY> -> generates a password, stores and prints it
-#        pw get <KEY>      -> prints the password for KEY
-# Aliases: add, ins -> insert  ; del -> remove ; upd -> update
+# Supported verbs: gen, ins, del, upd, ups, get
+# Usage: pw gen <KEY>      -> generate password, store and print it
+#        pw ins <KEY>      -> read password from stdin and store (fail if exists)
+#        pw upd <KEY>      -> read password from stdin and update (fail if missing)
+#        pw ups <KEY>      -> read password from stdin and upsert (create or update)
+#        pw get <KEY>      -> print the password for KEY
+#        pw del <KEY>      -> delete KEY
 
-HOME_DIR="${HOME:-$HOME}"
-STORE_DIR="$HOME_DIR/.local/containers"
-STORE_FILE="$STORE_DIR/pw.env"
-
-mkdir -p "$STORE_DIR"
+PW_HOME_DIR="${HOME:-$HOME}"
+PW_ENV="${PW_ENV:-"prod"}"
+PW_DIR="${PW_DIR:-"$PW_HOME_DIR/.local/containers"}"
+PW_FILE="${PW_FILE:-"$PW_DIR/$PW_ENV.env"}"
 
 usage() {
-  echo "Usage: pw {insert|update|generate|get|remove} <KEY>" >&2
-  echo "Aliases: add, ins -> insert ; del -> remove ; upd -> update" >&2
+  echo "Usage: pw {gen|ins|upd|ups|get|del} <KEY>" >&2
   exit 2
 }
 
@@ -35,24 +35,9 @@ fi
 cmd=$1
 key=$2
 
-# normalize aliases
-case "$cmd" in
-  gen)
-    cmd=generate
-    ;;
-  add|ins)
-    cmd=insert
-    ;;
-  del)
-    cmd=remove
-    ;;
-  upd)
-    cmd=update
-    ;;
-esac
-
 ensure_store() {
   if [ ! -f "$STORE_FILE" ]; then
+    mkdir -p "$(dirname "$STORE_FILE")" || true
     touch "$STORE_FILE"
     chmod 600 "$STORE_FILE" || true
   fi
@@ -109,8 +94,40 @@ read_stdin_no_newline() {
   printf "%s" "$val"
 }
 
+# Generate a random password consisting of URL-safe and bash-safe
+# characters (default length 24). Returns the password on stdout.
+generate_password() {
+  # fixed default length; avoid referencing positional args to satisfy linter
+  local target=24
+  local allowed='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._'
+  local alen=${#allowed}
+  local pw=''
+  while [ ${#pw} -lt "$target" ]; do
+    # read 2 bytes -> number between 0 and 65535
+    local num
+    num=$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')
+    if [ -z "$num" ]; then
+      continue
+    fi
+    local idx=$((num % alen))
+    pw="${pw}${allowed:idx:1}"
+  done
+  printf "%s" "$pw"
+}
+
 case "$cmd" in
-  insert)
+  gen)
+    # fail if key already exists
+    if key_exists "$key"; then
+      echo "key already exists" >&2
+      exit 1
+    fi
+    pw=$(generate_password)
+    write_key "$key" "$pw"
+    printf "%s" "$pw"
+    ;;
+
+  ins)
     # fail if key already exists
     if key_exists "$key"; then
       echo "key already exists" >&2
@@ -118,8 +135,8 @@ case "$cmd" in
     fi
     # read password from stdin
     if [ -t 0 ]; then
-      echo "pw insert requires password on stdin" >&2
-      echo "Example: printf '%s' \"mypassword\" | dc pw insert MY_PASS" >&2
+      echo "pw ins requires password on stdin" >&2
+      echo "Example: printf '%s' \"mypassword\" | pw ins MY_PASS" >&2
       exit 2
     fi
     val=$(read_stdin_no_newline)
@@ -130,15 +147,15 @@ case "$cmd" in
     write_key "$key" "$val"
     ;;
 
-  update)
+  upd)
     # only allow update if key exists
     if ! key_exists "$key"; then
       echo "key not found" >&2
       exit 1
     fi
     if [ -t 0 ]; then
-      echo "pw update requires password on stdin" >&2
-      echo "Example: printf '%s' \"mypassword\" | dc pw update MY_PASS" >&2
+      echo "pw upd requires password on stdin" >&2
+      echo "Example: printf '%s' \"mypassword\" | pw upd MY_PASS" >&2
       exit 2
     fi
     val=$(read_stdin_no_newline)
@@ -149,16 +166,28 @@ case "$cmd" in
     write_key "$key" "$val"
     ;;
 
-  generate)
-    # generate a reasonably strong password
-    if command -v openssl >/dev/null 2>&1; then
-      pw=$(openssl rand -base64 24)
+  ups)
+    # upsert: read password from stdin if provided; otherwise generate one
+    generate_pw=false
+    if [ -t 0 ]; then
+      # no stdin provided -> generate
+      generate_pw=true
     else
-      # fallback to base64 of random bytes
-      pw=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
+      val=$(read_stdin_no_newline)
+      if [ -z "$val" ]; then
+        generate_pw=true
+      fi
     fi
-    write_key "$key" "$pw"
-    printf "%s" "$pw"
+
+    if [ "$generate_pw" = true ]; then
+      pw=$(generate_password)
+      write_key "$key" "$pw"
+      # print generated password
+      printf "%s" "$pw"
+    else
+      # write provided password (upsert)
+      write_key "$key" "$val"
+    fi
     ;;
 
   get)
@@ -177,7 +206,7 @@ case "$cmd" in
     printf "%s" "$value"
     ;;
 
-  remove)
+  del)
     if remove_key "$key"; then
       exit 0
     else

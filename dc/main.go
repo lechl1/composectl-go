@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // StdoutResponseWriter implements http.ResponseWriter and http.Flusher
@@ -113,28 +114,71 @@ func main() {
 			os.Exit(1)
 		}
 
-	case "pw":
-		// Forward pw commands to an external `pw` script which reads/writes the env store.
-		if len(args) < 3 {
-			fmt.Fprintf(os.Stderr, "Usage: dc pw <insert|generate|get> <key>\n")
+	case "pw", "secret":
+		// Forward pw/secret commands to an external `pw` script which reads/writes the env store.
+		if len(args) < 2 {
+			fmt.Fprintf(os.Stderr, "Usage: dc %s <args...>\n", args[0])
 			os.Exit(1)
 		}
-		verb := args[1]
-		key := args[2]
-		// Try to find the pw helper: prefer PATH, fallback to ./dc/pw, then next to the dc executable.
-		script := "pw"
-		if _, err := exec.LookPath("pw"); err != nil {
-			candidate := filepath.Join(".", "dc", "pw")
-			if _, err2 := os.Stat(candidate); err2 == nil {
-				script = candidate
-			} else if ex, err3 := os.Executable(); err3 == nil {
-				alt := filepath.Join(filepath.Dir(ex), "pw")
-				if _, err4 := os.Stat(alt); err4 == nil {
-					script = alt
+		cmdArgs := args[1:]
+		// Normalize common long verbs to short aliases (insert/delete/update/upsert/get -> ins/del/upd/ups/get)
+		if len(cmdArgs) > 0 {
+			switch strings.ToLower(cmdArgs[0]) {
+			case "generate":
+				cmdArgs[0] = "gen"
+			case "insert", "add":
+				cmdArgs[0] = "ins"
+			case "delete", "remove", "rm":
+				cmdArgs[0] = "del"
+			case "update":
+				cmdArgs[0] = "upd"
+			case "upsert":
+				cmdArgs[0] = "ups"
+			case "select":
+				cmdArgs[0] = "get"
+			}
+		}
+		// Determine helper executable via configuration key `secrets_manager` (falls back to "pw").
+		script := getConfig("secrets_manager", "pw")
+		if script == "" {
+			script = "pw"
+		}
+		// If script is a simple name, prefer PATH; otherwise if it contains a path use that directly when present.
+		if !strings.ContainsAny(script, string(os.PathSeparator)) {
+			if _, err := exec.LookPath(script); err != nil {
+				// fallback to relative ./dc/<script> or next to executable
+				candidate := filepath.Join(".", "dc", script)
+				if _, err2 := os.Stat(candidate); err2 == nil {
+					script = candidate
+				} else if ex, err3 := os.Executable(); err3 == nil {
+					alt := filepath.Join(filepath.Dir(ex), script)
+					if _, err4 := os.Stat(alt); err4 == nil {
+						script = alt
+					}
+				}
+			}
+		} else {
+			// script contains a path; prefer it if it exists, otherwise attempt basename in PATH or fallbacks
+			if fi, err := os.Stat(script); err == nil && fi.Mode().IsRegular() {
+				// use provided path
+			} else {
+				base := filepath.Base(script)
+				if _, err := exec.LookPath(base); err == nil {
+					script = base
+				} else {
+					candidate := filepath.Join(".", "dc", base)
+					if _, err2 := os.Stat(candidate); err2 == nil {
+						script = candidate
+					} else if ex, err3 := os.Executable(); err3 == nil {
+						alt := filepath.Join(filepath.Dir(ex), base)
+						if _, err4 := os.Stat(alt); err4 == nil {
+							script = alt
+						}
+					}
 				}
 			}
 		}
-		cmd := exec.Command(script, verb, key)
+		cmd := exec.Command(script, cmdArgs...)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
