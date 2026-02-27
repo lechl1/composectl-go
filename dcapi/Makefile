@@ -1,4 +1,4 @@
-.PHONY: build install uninstall start stop restart status enable disable clean test help setup-auth
+.PHONY: build install uninstall start stop restart status enable disable clean test help setup-auth docker
 
 # Binary and service names
 BINARY_NAME=dcapi
@@ -28,6 +28,10 @@ build: ## Build the application
 	@mkdir -p $(BUILD_DIR)
 	$(GO) build $(GOFLAGS) -o $(BINARY_PATH)
 	@echo "Build complete: $(BINARY_PATH)"
+
+docker: build ## Build Docker image for dcapi using $(BUILD_DIR) in context
+	@echo "Building docker image: dcapi:local"
+	docker build -t dcapi:local -f Dockerfile build --build-arg BUILDDIR=$(BUILD_DIR)
 
 clean: ## Clean build artifacts
 	@echo "Cleaning build artifacts..."
@@ -222,4 +226,3 @@ setup-auth: ## Set up authentication credentials in prod.env
 	echo ""; \
 	echo "To apply changes, restart the service:"; \
 	echo "  make restart"
-

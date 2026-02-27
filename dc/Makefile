@@ -5,11 +5,15 @@ INSTALL_DIR=$(HOME)/.local/bin
 GO=go
 GOFLAGS=-ldflags="-s -w"
 
-.PHONY: build clean install test
+.PHONY: build clean install test docker
 
 build:
 	@mkdir -p $(BUILD_DIR)
 	$(GO) build $(GOFLAGS) -o $(BINARY_PATH)
+
+docker: build ## Build Docker image for dc using $(BUILD_DIR) in context
+	@echo "Building docker image: dc:local"
+	docker build -t dc:local -f Dockerfile build --build-arg BUILDDIR=$(BUILD_DIR)
 
 clean:
 	rm -f $(BINARY_PATH)

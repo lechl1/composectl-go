@@ -8,14 +8,9 @@ build:
 	$(MAKE) -C dcgui build
 
 docker: build
-	@echo "Collecting build artifacts into $(BUILD_DIR)..."
-	@mkdir -p $(BUILD_DIR)
-	@cp dc/build/dc $(BUILD_DIR)/dc
-	@cp dcapi/build/dcapi $(BUILD_DIR)/dcapi
-	@cp -r dcgui/build $(BUILD_DIR)/frontend
-	@echo "Running docker compose build..."
-	docker compose build
-	./dc/dc up docker-compose
+	$(MAKE) -C dc docker
+	$(MAKE) -C dcapi docker
+	$(MAKE) -C dcgui docker
 
 clean:
 	$(MAKE) -C dc clean
@@ -32,6 +27,10 @@ install:
 	$(MAKE) -C dc install
 	$(MAKE) -C dcapi install
 	# $(MAKE) -C dcgui install // Bundled with dcapi
+
+start:
+	$(MAKE) -C dcapi start
+
 
 start stop restart status update setup-auth enable disable reinstall uninstall:
 	$(MAKE) -C dcapi $@

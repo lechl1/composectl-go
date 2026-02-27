@@ -2,12 +2,7 @@ services:
   dcapi:
     build:
       context: ./build
-      dockerfile_inline: |
-        FROM docker:cli
-        COPY dc /usr/local/bin/dcapi
-        COPY dcapi /usr/local/bin/dcapi
-        EXPOSE 8882
-        CMD ["dcapi"]
+      dockerfile: dcapi/Dockerfile
     container_name: dcapi
     environment:
       - TZ=${TZ}
@@ -35,11 +30,10 @@ services:
   dcgui:
     build:
       context: ./build
-      dockerfile_inline: |
-        FROM nginx:alpine
-        COPY frontend /usr/share/nginx/html
-        EXPOSE 80
+      dockerfile: dcgui/Dockerfile
     container_name: dcgui
+    environment:
+      - DC_API_URL=http://dcapi:8882 # Set this to your dcapi service address (e.g. http://dcapi)
     networks:
       - dcapi
     restart: unless-stopped
