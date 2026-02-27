@@ -28,20 +28,6 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
 		}
-		stackName := segments[0]
-		actionName := segments[1]
-		switch actionName {
-		case "stop", "start", "up", "down", "create", "view":
-			if r.Method == http.MethodPost || r.Method == http.MethodPut {
-				HandleAction(w, r, "dc", actionName, stackName)
-			} else {
-				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			}
-		case "logs", "list", "ls":
-			if r.Method == http.MethodGet {
-				HandleAction(w, r, "dc", actionName, stackName)
-			}
-		}
 	} else if strings.HasPrefix(path, "/stacks") {
 		path = strings.TrimPrefix(path, "/stacks")
 		// bare GET /api/stacks → list all stacks
@@ -73,6 +59,7 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
 }
 
 func HandleAction(w http.ResponseWriter, r *http.Request, args ...string) {
