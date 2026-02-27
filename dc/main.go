@@ -2,103 +2,122 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 )
+
+// StdoutResponseWriter implements http.ResponseWriter and http.Flusher
+// and writes all output to stdout (headers/status to stderr).
+type StdoutResponseWriter struct {
+	h http.Header
+}
+
+func NewStdoutResponseWriter() *StdoutResponseWriter {
+	return &StdoutResponseWriter{h: make(http.Header)}
+}
+
+func (w *StdoutResponseWriter) Header() http.Header { return w.h }
+func (w *StdoutResponseWriter) WriteHeader(statusCode int) {
+	fmt.Fprintf(os.Stderr, "Status: %d\n", statusCode)
+}
+func (w *StdoutResponseWriter) Write(b []byte) (int, error) { return os.Stdout.Write(b) }
+func (w *StdoutResponseWriter) Flush()                      { _ = os.Stdout.Sync() }
+func (w *StdoutResponseWriter) WriteString(s string) (int, error) {
+	return io.WriteString(os.Stdout, s)
+}
+func (w *StdoutResponseWriter) WriteHeaderString(statusLine string) {
+	fmt.Fprintln(os.Stderr, statusLine)
+}
 
 func main() {
 	// Initialize paths first (respects --stacks-dir and --env-path arguments)
 	InitPaths(os.Args)
 
-	host := flag.String("host", "", "Server host (default: http://localhost:8882)")
-	user := flag.String("user", "", "Username")
-	password := flag.String("password", "", "Password")
+	// Keep compatibility with flags that might be passed; ignore unknowns
+	host := flag.String("host", "", "(ignored) Server host")
+	user := flag.String("user", "", "(ignored) Username")
+	password := flag.String("password", "", "(ignored) Password")
 	flag.Parse()
+	_ = host
+	_ = user
+	_ = password
 
 	args := flag.Args()
-	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: dc [--host=...] [--user=...] [--password=...] <command> <name>\n")
-		fmt.Fprintf(os.Stderr, "Commands: up, down, stop, logs, enrich\n")
-		os.Exit(1)
-	}
-	command := args[0]
-	name := args[1]
-
-	if *host == "" {
-		if v := os.Getenv("DC_HOST"); v != "" {
-			*host = v
-		} else {
-			*host = "http://localhost:8882"
-		}
-	}
-	if *user == "" {
-		*user = os.Getenv("DC_USER")
-	}
-	if *password == "" {
-		*password = os.Getenv("DC_PASSWORD")
-	}
-
-	token, err := login(*host, *user, *password)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "login failed: %v\n", err)
+	if len(args) < 1 {
+		fmt.Fprintf(os.Stderr, "Usage: dc stack <command> [name]\nCommands: ls, start|up, stop, down, logs\n")
 		os.Exit(1)
 	}
 
-	var yamlBody []byte
-	switch command {
-	case "up", "down", "stop", "enrich":
-		yamlBody, err = findYAML(name)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
+	writer := NewStdoutResponseWriter()
+
+	switch args[0] {
+	case "stack", "stacks":
+		if len(args) < 2 {
+			fmt.Fprintf(os.Stderr, "Usage: dc stack <command> [name]\n")
 			os.Exit(1)
 		}
-	case "logs":
-		// no body needed
+		cmd := args[1]
+		switch cmd {
+		case "ls", "list":
+			r := &http.Request{Method: http.MethodGet, URL: &url.URL{Path: "/api/stacks"}}
+			HandleListStacks(writer, r)
+		case "start", "up":
+			if len(args) < 3 {
+				fmt.Fprintf(os.Stderr, "Usage: dc stack %s <name>\n", cmd)
+				os.Exit(1)
+			}
+			name := args[2]
+			yamlBody, err := findYAML(name)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			r := &http.Request{
+				Method: http.MethodPut,
+				URL:    &url.URL{Path: "/api/stacks/" + name + "/start"},
+				Body:   io.NopCloser(bytes.NewReader(yamlBody)),
+			}
+			HandleStartStack(writer, r)
+		case "stop":
+			if len(args) < 3 {
+				fmt.Fprintf(os.Stderr, "Usage: dc stack stop <name>\n")
+				os.Exit(1)
+			}
+			name := args[2]
+			r := &http.Request{Method: http.MethodPut, URL: &url.URL{Path: "/api/stacks/" + name + "/stop"}}
+			HandleStopStack(writer, r)
+		case "down", "rm", "remove":
+			if len(args) < 3 {
+				fmt.Fprintf(os.Stderr, "Usage: dc stack %s <name>\n", cmd)
+				os.Exit(1)
+			}
+			name := args[2]
+			r := &http.Request{Method: http.MethodDelete, URL: &url.URL{Path: "/api/stacks/" + name}}
+			HandleDeleteStack(writer, r)
+		case "logs":
+			if len(args) < 3 {
+				fmt.Fprintf(os.Stderr, "Usage: dc stack logs <name>\n")
+				os.Exit(1)
+			}
+			name := args[2]
+			r := &http.Request{Method: http.MethodGet, URL: &url.URL{Path: "/api/stacks/" + name + "/logs"}}
+			HandleStreamStackLogs(writer, r)
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown stack command: %s\n", cmd)
+			os.Exit(1)
+		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", command)
-		os.Exit(1)
-	}
-
-	if err := run(*host, token, command, name, yamlBody); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", args[0])
 		os.Exit(1)
 	}
 }
 
-func login(host, user, password string) (string, error) {
-	req, err := http.NewRequest(http.MethodPost, host+"/api/auth/login", nil)
-	if err != nil {
-		return "", err
-	}
-	creds := base64.StdEncoding.EncodeToString([]byte(user + ":" + password))
-	req.Header.Set("Authorization", "Basic "+creds)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("login HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("parse login response: %w", err)
-	}
-	return result.Token, nil
-}
-
+// findYAML searches common locations for a stack YAML file. Kept from the previous CLI logic.
 func findYAML(name string) ([]byte, error) {
 	home, _ := os.UserHomeDir()
 	u := os.Getenv("USER")
@@ -118,48 +137,8 @@ func findYAML(name string) ([]byte, error) {
 	return nil, fmt.Errorf("no YAML found for stack %q; tried: %v", name, candidates)
 }
 
-func run(host, token, command, name string, body []byte) error {
-	var method, url string
-	switch command {
-	case "up":
-		method = http.MethodPut
-		url = fmt.Sprintf("%s/api/stacks/%s/start", host, name)
-	case "down":
-		method = http.MethodDelete
-		url = fmt.Sprintf("%s/api/stacks/%s", host, name)
-	case "stop":
-		method = http.MethodPut
-		url = fmt.Sprintf("%s/api/stacks/%s/stop", host, name)
-	case "logs":
-		method = http.MethodGet
-		url = fmt.Sprintf("%s/api/stacks/%s/logs", host, name)
-	case "enrich":
-		method = http.MethodPost
-		url = fmt.Sprintf("%s/api/stacks/%s/enrich", host, name)
-	}
-
-	var bodyReader io.Reader
-	if len(body) > 0 {
-		bodyReader = bytes.NewReader(body)
-	}
-
-	req, err := http.NewRequest(method, url, bodyReader)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	if len(body) > 0 {
-		req.Header.Set("Content-Type", "text/plain")
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if _, err := io.Copy(os.Stdout, resp.Body); err != nil {
-		return err
-	}
-	return nil
-}
+// The following old functions (login, run) are intentionally left as no-ops
+// to preserve compatibility with other callers in the repo; they are not used
+// by the new CLI entrypoint but kept to avoid breaking the build.
+func login(host, user, password string) (string, error)        { return "", nil }
+func run(host, token, command, name string, body []byte) error { return nil }

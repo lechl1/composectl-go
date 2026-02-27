@@ -3,11 +3,6 @@ stacks
 thumbnails
 *.log
 prod.env
-/dc/dc
-/dc/dcapi
-/dcapi/dc
-/dcapi/dcapi
-/dcapi/ui
 build
 /dcgui/.svelte-kit/
-/dcgui/node_modules/
+node_modules

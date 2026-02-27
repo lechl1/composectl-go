@@ -1,8 +1,10 @@
 .PHONY: build install uninstall start stop restart status enable disable clean test help setup-auth
 
 # Binary and service names
-BINARY_NAME=dc
-SERVICE_NAME=dc
+BINARY_NAME=dcapi
+SERVICE_NAME=dcapi
+BUILD_DIR=build
+BINARY_PATH=$(BUILD_DIR)/$(BINARY_NAME)
 
 # Installation paths
 INSTALL_DIR=$(HOME)/.local/bin
@@ -23,12 +25,13 @@ help: ## Show this help message
 
 build: ## Build the application
 	@echo "Building $(BINARY_NAME)..."
-	$(GO) build $(GOFLAGS) -o $(BINARY_NAME)
-	@echo "Build complete: $(BINARY_NAME)"
+	@mkdir -p $(BUILD_DIR)
+	$(GO) build $(GOFLAGS) -o $(BINARY_PATH)
+	@echo "Build complete: $(BINARY_PATH)"
 
 clean: ## Clean build artifacts
 	@echo "Cleaning build artifacts..."
-	rm -f $(BINARY_NAME)
+	rm -f $(BINARY_PATH)
 	@echo "Clean complete"
 
 test: ## Run tests
@@ -77,7 +80,7 @@ install: build ## Install the application and set up systemd user service
 	@mkdir -p $(INSTALL_DIR)
 
 	# Copy binary to installation directory
-	@cp $(BINARY_NAME) $(INSTALL_DIR)/$(BINARY_NAME)
+	@cp $(BINARY_PATH) $(INSTALL_DIR)/$(BINARY_NAME)
 	@chmod +x $(INSTALL_DIR)/$(BINARY_NAME)
 	@echo "Binary installed to $(INSTALL_DIR)/$(BINARY_NAME)"
 
@@ -173,7 +176,7 @@ reinstall: uninstall install enable start ## Uninstall, install, enable and star
 
 update: build stop ## Update the binary and restart service
 	@echo "Updating $(BINARY_NAME)..."
-	@cp $(BINARY_NAME) $(INSTALL_DIR)/$(BINARY_NAME)
+	@cp $(BINARY_PATH) $(INSTALL_DIR)/$(BINARY_NAME)
 	@chmod +x $(INSTALL_DIR)/$(BINARY_NAME)
 	@echo "Binary updated"
 	@$(MAKE) start

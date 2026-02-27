@@ -1,0 +1,59 @@
+services:
+  dcapi:
+    build:
+      context: ./build
+      dockerfile_inline: |
+        FROM docker:cli
+        COPY dc /usr/local/bin/dcapi
+        COPY dcapi /usr/local/bin/dcapi
+        EXPOSE 8882
+        CMD ["dcapi"]
+    container_name: dcapi
+    environment:
+      - TZ=${TZ}
+      # Credentials (pick one approach):
+      # Option A — plain env vars
+      # - ADMIN_USERNAME=admin
+      # - ADMIN_PASSWORD=changeme
+      # Option B — read from files (use with secrets below)
+      # - ADMIN_USERNAME_FILE=/run/secrets/admin_username
+      # - ADMIN_PASSWORD_FILE=/run/secrets/admin_password
+    volumes:
+      # Stacks + prod.env live here; auto-detected by dcapi
+      - ${HOME}/.local/containers:/containers
+      # Docker socket — use whichever matches your Docker installation:
+      # Rootless Docker (most common for non-root users):
+      - /run/user/${UID}/docker.sock:/var/run/docker.sock
+      # Standard root Docker:
+      # - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8882:8882"
+    networks:
+      - dcapi
+    restart: unless-stopped
+
+  dcgui:
+    build:
+      context: ./build
+      dockerfile_inline: |
+        FROM nginx:alpine
+        COPY frontend /usr/share/nginx/html
+        EXPOSE 80
+    container_name: dcgui
+    networks:
+      - dcapi
+    restart: unless-stopped
+
+  # secrets:
+  #   - admin_username
+  #   - admin_password
+
+networks:
+  dcapi:
+    driver: bridge
+
+# secrets:
+#   admin_username:
+#     file: ./secrets/admin_username.txt
+#   admin_password:
+#     file: ./secrets/admin_password.txt
