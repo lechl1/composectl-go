@@ -1,8 +1,8 @@
 package main
 
 import (
-	"fmt"
 	"net/http"
+	"os/exec"
 	"strings"
 )
 
@@ -13,16 +13,21 @@ func RegisterHTTPHandlers() {
 	http.HandleFunc("/ws", JwtAuthMiddleware(HandleWebSocket))
 	http.HandleFunc("/api/thumbnail", JwtAuthMiddleware(HandleThumbnail))
 	http.HandleFunc("/api/stacks", JwtAuthMiddleware(HandleStackAPI))
+	http.HandleFunc("/api/stacks/", JwtAuthMiddleware(HandleStackAPI))
 }
 
-// handleStackAPI routes stack API requests to appropriate handlers
+// HandleStackAPI routes stack API requests to appropriate handlers
 func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
-	path = strings.TrimSuffix(path, "/api")
+	path = strings.TrimPrefix(path, "/api")
 
-	if strings.HasPrefix("/auth", path) {
+	if strings.HasPrefix(path, "/auth") {
 		path = strings.TrimPrefix(path, "/auth")
 		segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+		if len(segments) < 2 {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
 		stackName := segments[0]
 		actionName := segments[1]
 		switch actionName {
@@ -37,9 +42,22 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 				HandleAction(w, r, "dc", actionName, stackName)
 			}
 		}
-	} else if strings.HasPrefix("/stacks", path) {
+	} else if strings.HasPrefix(path, "/stacks") {
 		path = strings.TrimPrefix(path, "/stacks")
+		// bare GET /api/stacks → list all stacks
+		if path == "" || path == "/" {
+			if r.Method == http.MethodGet {
+				HandleAction(w, r, "dc", "ls")
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
 		segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+		if len(segments) < 2 {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
 		stackName := segments[0]
 		actionName := segments[1]
 		switch actionName {
@@ -58,8 +76,23 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleAction(w http.ResponseWriter, r *http.Request, args ...string) {
-	c := fmt.Sprintln(args)
-	// Execute the command and handle the response
-	// This is a placeholder for the actual implementation
-	w.Write([]byte(fmt.Sprintf("Executed: %s", c)))
+	if len(args) < 2 {
+		http.Error(w, "invalid action args", http.StatusInternalServerError)
+		return
+	}
+	binary := args[0]
+	cmdArgs := []string{"stacks", args[1]}
+	for _, a := range args[2:] {
+		if a != "" {
+			cmdArgs = append(cmdArgs, a)
+		}
+	}
+	cmd := exec.Command(binary, cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		http.Error(w, string(out), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(out)
 }
