@@ -5,13 +5,14 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
-	"github.com/golang-jwt/jwt/v5"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // SessionStore holds active sessions in memory
@@ -92,8 +93,35 @@ func readSecretFile(path string) (string, error) {
 	return strings.TrimSpace(string(content)), nil
 }
 
+// isAuthDisabled returns true when authentication is explicitly disabled via env/flags
+func isAuthDisabled() bool {
+	val := strings.ToLower(getConfig("auth_disabled", "false"))
+	switch val {
+	case "true":
+		return true
+	default:
+		return false
+	}
+}
+
 // HandleLogin handles the /login endpoint - accepts Basic Auth only
 func HandleLogin(w http.ResponseWriter, r *http.Request) {
+	// If auth is disabled globally, return a static token and create a long-lived session
+	if isAuthDisabled() {
+		log.Println("AUTH_DISABLED is set; skipping login authentication")
+		// Use a fixed token value so clients can send any token or this one. Store it so middleware can find it.
+		const disabledToken = "AUTH_DISABLED"
+		expiresAt := time.Now().Add(100 * 365 * 24 * time.Hour) // very long lived
+		sessionStore.AddSession(disabledToken, &SessionInfo{
+			Username:  getConfig("admin_username", "admin"),
+			ExpiresAt: expiresAt,
+			CreatedAt: time.Now(),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, disabledToken)
+		return
+	}
+
 	// Only accept POST requests
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -160,6 +188,13 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleLogout(w http.ResponseWriter, r *http.Request) {
+	// If auth is disabled, just return success (noop)
+	if isAuthDisabled() {
+		log.Println("AUTH_DISABLED is set; skipping logout")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	// Only accept POST requests
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -199,6 +234,16 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 
 // validateBearerToken validates a JWT bearer token and renews the session
 func validateBearerToken(tokenString string) (*Claims, error) {
+	// If auth disabled, allow all requests and return a synthetic claim
+	if isAuthDisabled() {
+		return &Claims{
+			Username: getConfig("admin_username", "admin"),
+			RegisteredClaims: jwt.RegisteredClaims{
+				ExpiresAt: jwt.NewNumericDate(time.Now().Add(100 * 365 * 24 * time.Hour)),
+			},
+		}, nil
+	}
+
 	// Check if session exists and is not expired
 	sessionInfo, exists := sessionStore.GetSession(tokenString)
 	if !exists {
@@ -237,6 +282,13 @@ func validateBearerToken(tokenString string) (*Claims, error) {
 
 func JwtAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// If auth is disabled, skip auth checks entirely
+		if isAuthDisabled() {
+			// Allow the request through
+			next(w, r)
+			return
+		}
+
 		// Only accept Bearer token (no Basic Auth fallback)
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
@@ -401,4 +453,8 @@ func generateURLSafePassword(length int) (string, error) {
 	}
 
 	return password, nil
+}
+
+func HandleAuthStatus(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK) // If we got here, the token is valid
 }

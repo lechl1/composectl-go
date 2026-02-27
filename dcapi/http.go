@@ -9,6 +9,7 @@ import (
 func RegisterHTTPHandlers() {
 	http.HandleFunc("/api/auth/login", HandleLogin)
 	http.HandleFunc("/api/auth/logout", JwtAuthMiddleware(HandleLogout))
+	http.HandleFunc("/api/auth/status", JwtAuthMiddleware(HandleAuthStatus))
 	http.HandleFunc("/ws", JwtAuthMiddleware(HandleWebSocket))
 	http.HandleFunc("/api/thumbnail", JwtAuthMiddleware(HandleThumbnail))
 	http.HandleFunc("/api/stacks", JwtAuthMiddleware(HandleStackAPI))

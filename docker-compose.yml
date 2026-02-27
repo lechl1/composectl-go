@@ -4,6 +4,7 @@ services:
     container_name: dcapi
     environment:
       - TZ=${TZ}
+      - AUTH_DISABLED=${AUTH_DISABLED:-true}
       # Credentials (pick one approach):
       # Option A — plain env vars
       # - ADMIN_USERNAME=admin
@@ -29,7 +30,9 @@ services:
     image: dcgui:local
     container_name: dcgui
     environment:
-      - DC_API_URL=http://dcapi:8882 # Set this to your dcapi service address (e.g. http://dcapi)
+      - TZ=${TZ}
+      - DC_API_URL=${DC_API_URL:-http://dcapi:8882} # Set this to your dcapi service address (e.g. http://dcapi)
+      - AUTH_DISABLED=${AUTH_DISABLED:-true} # Pass through whether auth is disabled (defaults to false)
     ports:
         - "8802:80"
     networks:

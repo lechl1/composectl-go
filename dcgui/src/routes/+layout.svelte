@@ -1,26 +1,18 @@
 <script>
   import { onMount } from "svelte";
-  import { goto } from "$app/navigation";
   import { page } from "$app/stores";
-  import { isAuthenticated } from "$lib/auth.js";
   import '../index.css';
+  import { checkAuth } from "$lib/auth";
 
-  onMount(() => {
+  onMount(async () => {
+    // Fetch auth status from backend; if endpoint not available, default to false
+    await checkAuth();
+
     // Check authentication on mount and route changes
-    const unsubscribe = page.subscribe(($page) => {
-      // Allow login page without authentication
-      if ($page.url.pathname === '/login') {
-        return;
-      }
-
-      // Redirect to login if not authenticated
-      if (!isAuthenticated()) {
-        goto('/login');
-      }
+    return page.subscribe(async () => {
+      await checkAuth();
     });
-
-    return unsubscribe;
   });
 </script>
 
-<slot />
+<slot></slot>

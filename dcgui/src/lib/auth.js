@@ -1,6 +1,13 @@
 import { goto } from "$app/navigation";
 import { browser } from "$app/environment";
 
+function gotoRoot() {
+  const loginHref = (typeof window !== 'undefined' && window.location && window.location.origin)
+      ? `${window.location.origin}/login`
+      : '/login';
+  goto(loginHref);
+}
+
 /**
  * Authenticated fetch wrapper that handles 401/403 redirects
  */
@@ -22,9 +29,8 @@ export async function authFetch(url, options = {}) {
     // Check for authentication errors
     if (response.status === 401 || response.status === 403) {
       if (browser) {
-        // Clear token and redirect to login
         localStorage.removeItem("authToken");
-        goto("/login");
+        gotoRoot();
       }
       throw new Error("Unauthorized");
     }
@@ -41,12 +47,36 @@ export async function authFetch(url, options = {}) {
 }
 
 /**
+ * Check authentication status by calling /api/auth/status with bearer token (if present)
+ * Returns the fetch Response or null on error. Performs redirects similar to previous inline logic.
+ */
+export async function checkAuth() {
+  if (!browser) {
+    return false;
+  }
+  const headers = {};
+  const token = localStorage.getItem("authToken");
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch('/api/auth/status', { headers });
+
+  // If the response is not 2xx, and we're on the login page, redirect to /
+  if (!res.ok && browser && window.location && window.location.pathname.indexOf('/login') >= 0) {
+    return gotoRoot();
+  }
+
+  return true;
+}
+
+/**
  * Logout function
  */
 export function logout() {
   if (browser) {
     localStorage.removeItem("authToken");
-    goto("/login");
+    return gotoRoot();
   }
 }
 
@@ -59,4 +89,3 @@ export function isAuthenticated() {
   }
   return false;
 }
-

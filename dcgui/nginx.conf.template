@@ -1,7 +1,23 @@
+# Map AUTH_DISABLED environment variable (rendered by envsubst) to an nginx variable.
+# This file is rendered from the docker entrypoint using envsubst to replace ${AUTH_DISABLED}.
+map "${AUTH_DISABLED}" $auth_disabled {
+    default 0;
+    "true" 1;
+}
+
 server {
     listen 80;
     server_name _;
     root /usr/share/nginx/html;
+
+    # If auth is disabled, redirect /login to / (temporary redirect).
+    # Otherwise serve the prerendered login page.
+    location = /login {
+        if ($auth_disabled = 1) {
+            return 302 /;
+        }
+        try_files $uri $uri/ /login.html;
+    }
 
     # Serve static files and fallback to index.html for SPA routing
     location / {
