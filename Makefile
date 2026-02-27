@@ -8,7 +8,6 @@ build:
 	$(MAKE) -C dcgui build
 
 docker: build
-	$(MAKE) -C dc docker
 	$(MAKE) -C dcapi docker
 	$(MAKE) -C dcgui docker
 

@@ -13,11 +13,6 @@ build:
 	cp $(BINARY_PATH) $(INSTALL_DIR)/$(BINARY_NAME)
 	cp pw $(BUILD_DIR)/pw
 
-docker: build
-	@echo "Building docker image: dc:local"
-	cp pw $(BUILD_DIR)/
-	docker build -t dc:local -f Dockerfile build
-
 clean:
 	rm -f $(BINARY_PATH)
 

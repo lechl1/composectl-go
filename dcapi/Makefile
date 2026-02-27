@@ -24,19 +24,15 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
 build: ## Build the application
-	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
+	cp ../dc/build/* $(BUILD_DIR)/
 	$(GO) build $(GOFLAGS) -o $(BINARY_PATH)
-	@echo "Build complete: $(BINARY_PATH)"
 
-docker: build ## Build Docker image for dcapi using $(BUILD_DIR) in context
-	@echo "Building docker image: dcapi:local"
-	docker build -t dcapi:local -f Dockerfile build --build-arg BUILDDIR=$(BUILD_DIR)
+docker: ## Build Docker image for dcapi using $(BUILD_DIR) in context
+	docker build -t dcapi:local -f Dockerfile build
 
 clean: ## Clean build artifacts
-	@echo "Cleaning build artifacts..."
 	rm -f $(BINARY_PATH)
-	@echo "Clean complete"
 
 test: ## Run tests
 	@echo "Running tests..."
@@ -44,12 +40,9 @@ test: ## Run tests
 	@echo "Tests complete"
 
 install: build ## Install the application and set up systemd user service
-	@echo "Installing $(BINARY_NAME)..."
-
 	# Create containers directory structure
 	@mkdir -p $(WORKING_DIR)/stacks
 	@mkdir -p $(WORKING_DIR)/thumbnails
-	@echo "Created directory structure at $(WORKING_DIR)"
 
 	# Initialize prod.env if it doesn't exist
 	@if [ ! -f $(PROD_ENV) ]; then \
