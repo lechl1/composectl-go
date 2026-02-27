@@ -7,8 +7,12 @@ build:
 	$(NPM) run build
 
 docker: build ## Build Docker image for frontend (dcgui)
-	@echo "Building docker image: dcgui:local"
-	docker build -t dcgui:local -f Dockerfile build --build-arg BUILDDIR=build
+	# Copy additional assets into build context so Dockerfile can COPY them
+	cp nginx.conf.template build/ || true
+	cp docker-entrypoint.sh build/ || true
+	docker build -t dcgui:local -f Dockerfile build
+	# Clean up temporary files copied into build/
+	rm -f build/nginx.conf.template build/docker-entrypoint.sh || true
 
 clean:
 	rm -rf build

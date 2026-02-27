@@ -4,5 +4,8 @@ FROM alpine:3.18
 COPY dc /usr/local/bin/dc
 RUN chmod +x /usr/local/bin/dc
 
+COPY pw /usr/local/bin/pw
+RUN chmod +x /usr/local/bin/pw
+
 ENTRYPOINT ["/usr/local/bin/dc"]
 

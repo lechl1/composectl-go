@@ -1,8 +1,6 @@
 services:
   dcapi:
-    build:
-      context: ./build
-      dockerfile: dcapi/Dockerfile
+    image: dcapi:local
     container_name: dcapi
     environment:
       - TZ=${TZ}
@@ -18,24 +16,22 @@ services:
       - ${HOME}/.local/containers:/containers
       # Docker socket — use whichever matches your Docker installation:
       # Rootless Docker (most common for non-root users):
-      - /run/user/${UID}/docker.sock:/var/run/docker.sock
+      - /run/user/${USER_ID}/docker.sock:/var/run/docker.sock
       # Standard root Docker:
       # - /var/run/docker.sock:/var/run/docker.sock
       # Provide the pw helper script into the container (read-only)
       - ./dc/pw:/usr/local/bin/pw:ro
-    ports:
-      - "8882:8882"
     networks:
       - dcapi
     restart: unless-stopped
 
   dcgui:
-    build:
-      context: ./build
-      dockerfile: dcgui/Dockerfile
+    image: dcgui:local
     container_name: dcgui
     environment:
       - DC_API_URL=http://dcapi:8882 # Set this to your dcapi service address (e.g. http://dcapi)
+    ports:
+        - "8802:80"
     networks:
       - dcapi
     restart: unless-stopped

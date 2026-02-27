@@ -1,4 +1,4 @@
-.PHONY: build clean test install docker start stop restart status update setup-auth enable disable reinstall uninstall
+.PHONY: build clean test install docker compose start stop restart status update setup-auth enable disable reinstall uninstall
 
 BUILD_DIR=build
 
@@ -28,6 +28,8 @@ install:
 	$(MAKE) -C dcapi install
 	# $(MAKE) -C dcgui install // Bundled with dcapi
 
+compose:
+	USER_ID=$(shell id -u) docker compose -p dc -f docker-compose.yml up -d
 
 start stop restart status update setup-auth enable disable reinstall:
 	$(MAKE) -C dcapi $@

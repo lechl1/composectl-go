@@ -4,7 +4,7 @@ FROM nginx:alpine
 RUN apk add --no-cache gettext
 
 # Copy static frontend build output into nginx html directory
-COPY build /usr/share/nginx/html
+COPY . /usr/share/nginx/html
 
 # Copy nginx config template and entrypoint script
 COPY nginx.conf.template /etc/nginx/conf.d/default.conf.template
