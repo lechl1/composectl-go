@@ -28,8 +28,12 @@ func (w *StdoutResponseWriter) Header() http.Header { return w.h }
 func (w *StdoutResponseWriter) WriteHeader(statusCode int) {
 
 }
-func (w *StdoutResponseWriter) Write(b []byte) (int, error) { return 200, nil }
+func (w *StdoutResponseWriter) Write(b []byte) (int, error) { return os.Stdout.Write(b) }
 func (w *StdoutResponseWriter) Flush()                      { _ = os.Stdout.Sync() }
+
+func (w *StdoutResponseWriter) WriteHeaderString(statusLine string) {
+
+}
 
 func main() {
 	// Buffer all log output so that successful invocations (e.g. "dc stacks ls")
