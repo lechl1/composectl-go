@@ -10,6 +10,8 @@ GOFLAGS=-ldflags="-s -w"
 build:
 	@mkdir -p $(BUILD_DIR)
 	$(GO) build $(GOFLAGS) -o $(BINARY_PATH)
+	cp $(BINARY_PATH) $(INSTALL_DIR)/$(BINARY_NAME)
+	cp pw $(BUILD_DIR)/pw
 
 docker: build
 	@echo "Building docker image: dc:local"
@@ -22,24 +24,9 @@ clean:
 install: build
 	@mkdir -p $(INSTALL_DIR)
 	cp $(BINARY_PATH) $(INSTALL_DIR)/$(BINARY_NAME)
+	cp $(BUILD_DIR)/pw $(INSTALL_DIR)/pw
 	chmod +x $(INSTALL_DIR)/$(BINARY_NAME)
-	# Install pw helper if present in repo, but avoid overwriting a user's custom pw
-	if [ -f pw ]; then \
-		TARGET="$(INSTALL_DIR)/pw"; \
-		ID="COMPOSECTL_PW_ID=composectl_pw_default_v1"; \
-		if [ ! -f "$${TARGET}" ]; then \
-			cp pw $${TARGET}; chmod +x $${TARGET}; \
-			echo "installed pw helper to $${TARGET}"; \
-		else \
-			# If the existing pw contains our identifier, it's the repo default and we overwrite it
-			if grep -q "$${ID}" "$${TARGET}" 2>/dev/null; then \
-				cp pw $${TARGET}; chmod +x $${TARGET}; \
-				echo "updated pw helper at $${TARGET}"; \
-			else \
-				echo "skipping pw install: custom pw detected at $${TARGET} (not overwritten)"; \
-			fi; \
-		fi; \
-	fi
+	chmod +x $(INSTALL_DIR)/pw
 
 test:
 	$(GO) test -v ./...

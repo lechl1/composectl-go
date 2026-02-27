@@ -28,7 +28,7 @@ install:
 	$(MAKE) -C dcapi install
 	# $(MAKE) -C dcgui install // Bundled with dcapi
 
-compose:
+compose: docker
 	USER_ID=$(shell id -u) docker compose -p dc -f docker-compose.yml up -d
 
 start stop restart status update setup-auth enable disable reinstall:

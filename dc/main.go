@@ -42,12 +42,8 @@ func main() {
 
 	// Keep compatibility with flags that might be passed; ignore unknowns
 	host := flag.String("host", "", "(ignored) Server host")
-	user := flag.String("user", "", "(ignored) Username")
-	password := flag.String("password", "", "(ignored) Password")
 	flag.Parse()
 	_ = host
-	_ = user
-	_ = password
 
 	args := flag.Args()
 	if len(args) < 1 {
@@ -200,6 +196,10 @@ func findYAML(name string) ([]byte, error) {
 
 	candidates := []string{
 		fmt.Sprintf("./%s.yml", name),
+		filepath.Join(home, "/stacks", name+".yml"),
+		filepath.Join(home, ".local/stacks", name+".yml"),
+		filepath.Join(home, ".dotfiles/users", u, ".local/stacks", name+".yml"),
+		filepath.Join(home, "/containers", name+".yml"),
 		filepath.Join(home, ".local/containers", name+".yml"),
 		filepath.Join(home, ".dotfiles/users", u, ".local/containers", name+".yml"),
 	}

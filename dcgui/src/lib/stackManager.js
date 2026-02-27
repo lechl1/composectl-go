@@ -156,11 +156,18 @@ export async function del({ url, log, successMessage, errorMessage, ...options }
 }
 
 export async function fetchStacks() {
-    const response = await authFetch('/api/stacks');
-    if (!response.ok) {
-      return []
+    try {
+        const response = await authFetch('/api/stacks');
+        if (!response.ok) {
+          return [];
+        }
+        return (await response.json() || []).sort((a, b) => a.name.localeCompare(b.name));
+    } catch (err) {
+        // authFetch may throw for network/auth errors (e.g. Unauthorized).
+        // Log and return empty list so the UI doesn't break when tokens are invalid.
+        console.error('fetchStacks error', err);
+        return [];
     }
-    return (await response.json() || []).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 
@@ -212,4 +219,3 @@ export async function saveStack(stackName, body, log) {
     errorMessage: 'Failed to save stack'
   })
 }
-

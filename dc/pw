@@ -36,10 +36,10 @@ cmd=$1
 key=$2
 
 ensure_store() {
-  if [ ! -f "$STORE_FILE" ]; then
-    mkdir -p "$(dirname "$STORE_FILE")" || true
-    touch "$STORE_FILE"
-    chmod 600 "$STORE_FILE" || true
+  if [ ! -f "$PW_FILE" ]; then
+    mkdir -p "$(dirname "$PW_FILE")" || true
+    touch "$PW_FILE"
+    chmod 600 "$PW_FILE" || true
   fi
 }
 
@@ -49,37 +49,37 @@ write_key() {
   local v=$2
   ensure_store
   # remove existing key lines
-  if grep -qE "^${k}=" "$STORE_FILE" 2>/dev/null; then
+  if grep -qE "^${k}=" "$PW_FILE" 2>/dev/null; then
     # use temporary file for atomic replace
     tmp=$(mktemp)
-    grep -vE "^${k}=" "$STORE_FILE" > "$tmp" || true
+    grep -vE "^${k}=" "$PW_FILE" > "$tmp" || true
     echo "${k}=${v}" >> "$tmp"
-    mv "$tmp" "$STORE_FILE"
+    mv "$tmp" "$PW_FILE"
   else
-    echo "${k}=${v}" >> "$STORE_FILE"
+    echo "${k}=${v}" >> "$PW_FILE"
   fi
 }
 
 # remove a key
 remove_key() {
   local k=$1
-  if [ ! -f "$STORE_FILE" ]; then
+  if [ ! -f "$PW_FILE" ]; then
     return 1
   fi
-  if ! grep -qE "^${k}=" "$STORE_FILE" 2>/dev/null; then
+  if ! grep -qE "^${k}=" "$PW_FILE" 2>/dev/null; then
     return 1
   fi
   tmp=$(mktemp)
-  grep -vE "^${k}=" "$STORE_FILE" > "$tmp" || true
-  mv "$tmp" "$STORE_FILE"
+  grep -vE "^${k}=" "$PW_FILE" > "$tmp" || true
+  mv "$tmp" "$PW_FILE"
 }
 
 # check if key exists
 key_exists() {
-  if [ ! -f "$STORE_FILE" ]; then
+  if [ ! -f "$PW_FILE" ]; then
     return 1
   fi
-  if grep -qE "^${1}=" "$STORE_FILE" 2>/dev/null; then
+  if grep -qE "^${1}=" "$PW_FILE" 2>/dev/null; then
     return 0
   fi
   return 1
@@ -124,7 +124,6 @@ case "$cmd" in
     fi
     pw=$(generate_password)
     write_key "$key" "$pw"
-    printf "%s" "$pw"
     ;;
 
   ins)
@@ -191,12 +190,12 @@ case "$cmd" in
     ;;
 
   get)
-    if [ ! -f "$STORE_FILE" ]; then
+    if [ ! -f "$PW_FILE" ]; then
       echo "key not found" >&2
       exit 1
     fi
     # print value for key
-    line=$(grep -E "^${key}=" "$STORE_FILE" || true)
+    line=$(grep -E "^${key}=" "$PW_FILE" || true)
     if [ -z "$line" ]; then
       echo "key not found" >&2
       exit 1
