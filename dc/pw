@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# COMPOSECTL PW IDENTIFIER
+# COMPOSECTL_PW_ID=composectl_pw_default_v1
+# This comment is used by the `dc/Makefile` install target to detect whether
+# the installed `pw` script is the repository-provided default (contains
+# COMPOSECTL_PW_ID) or a user-provided custom implementation. If a custom
+# implementation is present in the user's install directory, the Makefile
+# will avoid overwriting it.
+
+# Simple password store backed by a single env-style file.
+# Usage: pw insert <KEY>   -> reads password from stdin and stores KEY=value (fails if KEY exists)
+#        pw update <KEY>   -> reads password from stdin and updates KEY (fails if KEY missing)
+#        pw generate <KEY> -> generates a password, stores and prints it
+#        pw get <KEY>      -> prints the password for KEY
+# Aliases: add, ins -> insert  ; del -> remove ; upd -> update
+
+HOME_DIR="${HOME:-$HOME}"
+STORE_DIR="$HOME_DIR/.local/containers"
+STORE_FILE="$STORE_DIR/pw.env"
+
+mkdir -p "$STORE_DIR"
+
+usage() {
+  echo "Usage: pw {insert|update|generate|get|remove} <KEY>" >&2
+  echo "Aliases: add, ins -> insert ; del -> remove ; upd -> update" >&2
+  exit 2
+}
+
+if [ $# -lt 2 ]; then
+  usage
+fi
+
+cmd=$1
+key=$2
+
+# normalize aliases
+case "$cmd" in
+  gen)
+    cmd=generate
+    ;;
+  add|ins)
+    cmd=insert
+    ;;
+  del)
+    cmd=remove
+    ;;
+  upd)
+    cmd=update
+    ;;
+esac
+
+ensure_store() {
+  if [ ! -f "$STORE_FILE" ]; then
+    touch "$STORE_FILE"
+    chmod 600 "$STORE_FILE" || true
+  fi
+}
+
+# write key=value (overwrites existing key)
+write_key() {
+  local k=$1
+  local v=$2
+  ensure_store
+  # remove existing key lines
+  if grep -qE "^${k}=" "$STORE_FILE" 2>/dev/null; then
+    # use temporary file for atomic replace
+    tmp=$(mktemp)
+    grep -vE "^${k}=" "$STORE_FILE" > "$tmp" || true
+    echo "${k}=${v}" >> "$tmp"
+    mv "$tmp" "$STORE_FILE"
+  else
+    echo "${k}=${v}" >> "$STORE_FILE"
+  fi
+}
+
+# remove a key
+remove_key() {
+  local k=$1
+  if [ ! -f "$STORE_FILE" ]; then
+    return 1
+  fi
+  if ! grep -qE "^${k}=" "$STORE_FILE" 2>/dev/null; then
+    return 1
+  fi
+  tmp=$(mktemp)
+  grep -vE "^${k}=" "$STORE_FILE" > "$tmp" || true
+  mv "$tmp" "$STORE_FILE"
+}
+
+# check if key exists
+key_exists() {
+  if [ ! -f "$STORE_FILE" ]; then
+    return 1
+  fi
+  if grep -qE "^${1}=" "$STORE_FILE" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+read_stdin_no_newline() {
+  # read all stdin, strip trailing newline(s)
+  local val
+  val=$(cat -)
+  # remove trailing newlines
+  val=$(printf "%s" "$val" | sed -e ':a' -e '$!{N;ba' -e '}' -e 's/\n$//' )
+  printf "%s" "$val"
+}
+
+case "$cmd" in
+  insert)
+    # fail if key already exists
+    if key_exists "$key"; then
+      echo "key already exists" >&2
+      exit 1
+    fi
+    # read password from stdin
+    if [ -t 0 ]; then
+      echo "pw insert requires password on stdin" >&2
+      echo "Example: printf '%s' \"mypassword\" | dc pw insert MY_PASS" >&2
+      exit 2
+    fi
+    val=$(read_stdin_no_newline)
+    if [ -z "$val" ]; then
+      echo "empty password from stdin" >&2
+      exit 2
+    fi
+    write_key "$key" "$val"
+    ;;
+
+  update)
+    # only allow update if key exists
+    if ! key_exists "$key"; then
+      echo "key not found" >&2
+      exit 1
+    fi
+    if [ -t 0 ]; then
+      echo "pw update requires password on stdin" >&2
+      echo "Example: printf '%s' \"mypassword\" | dc pw update MY_PASS" >&2
+      exit 2
+    fi
+    val=$(read_stdin_no_newline)
+    if [ -z "$val" ]; then
+      echo "empty password from stdin" >&2
+      exit 2
+    fi
+    write_key "$key" "$val"
+    ;;
+
+  generate)
+    # generate a reasonably strong password
+    if command -v openssl >/dev/null 2>&1; then
+      pw=$(openssl rand -base64 24)
+    else
+      # fallback to base64 of random bytes
+      pw=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
+    fi
+    write_key "$key" "$pw"
+    printf "%s" "$pw"
+    ;;
+
+  get)
+    if [ ! -f "$STORE_FILE" ]; then
+      echo "key not found" >&2
+      exit 1
+    fi
+    # print value for key
+    line=$(grep -E "^${key}=" "$STORE_FILE" || true)
+    if [ -z "$line" ]; then
+      echo "key not found" >&2
+      exit 1
+    fi
+    # cut only the first '=' to allow '=' in value
+    value=$(printf "%s" "$line" | sed -E 's/^[^=]+=//')
+    printf "%s" "$value"
+    ;;
+
+  remove)
+    if remove_key "$key"; then
+      exit 0
+    else
+      echo "key not found" >&2
+      exit 1
+    fi
+    ;;
+
+  *)
+    usage
+    ;;
+esac
+

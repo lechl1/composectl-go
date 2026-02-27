@@ -28,9 +28,11 @@ install:
 	$(MAKE) -C dcapi install
 	# $(MAKE) -C dcgui install // Bundled with dcapi
 
-start:
-	$(MAKE) -C dcapi start
 
-
-start stop restart status update setup-auth enable disable reinstall uninstall:
+start stop restart status update setup-auth enable disable reinstall:
 	$(MAKE) -C dcapi $@
+
+uninstall:
+	$(MAKE) -C dc uninstall
+	$(MAKE) -C dcapi uninstall
+	$(MAKE) -C dcgui uninstall

@@ -1,7 +1,7 @@
 INSTALL_DIR=$(HOME)/.local/bin
 NPM=npm
 
-.PHONY: build clean install test dev docker check-config
+.PHONY: build clean install test dev docker check-config uninstall
 
 build:
 	$(NPM) run build
@@ -24,3 +24,10 @@ test:
 
 dev:
 	$(NPM) run dev
+
+uninstall: ## Remove installed dcgui binary (if any) and built assets
+	@echo "Uninstalling dcgui..."
+	@rm -f $(INSTALL_DIR)/dcgui || true
+	@echo "Removed $(INSTALL_DIR)/dcgui if it existed"
+	@rm -rf build || true
+	@echo "Removed build artifacts"

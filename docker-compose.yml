@@ -21,6 +21,8 @@ services:
       - /run/user/${UID}/docker.sock:/var/run/docker.sock
       # Standard root Docker:
       # - /var/run/docker.sock:/var/run/docker.sock
+      # Provide the pw helper script into the container (read-only)
+      - ./dc/pw:/usr/local/bin/pw:ro
     ports:
       - "8882:8882"
     networks:

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -111,6 +112,37 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Unknown stack command: %s\n", cmd)
 			os.Exit(1)
 		}
+
+	case "pw":
+		// Forward pw commands to an external `pw` script which reads/writes the env store.
+		if len(args) < 3 {
+			fmt.Fprintf(os.Stderr, "Usage: dc pw <insert|generate|get> <key>\n")
+			os.Exit(1)
+		}
+		verb := args[1]
+		key := args[2]
+		// Try to find the pw helper: prefer PATH, fallback to ./dc/pw, then next to the dc executable.
+		script := "pw"
+		if _, err := exec.LookPath("pw"); err != nil {
+			candidate := filepath.Join(".", "dc", "pw")
+			if _, err2 := os.Stat(candidate); err2 == nil {
+				script = candidate
+			} else if ex, err3 := os.Executable(); err3 == nil {
+				alt := filepath.Join(filepath.Dir(ex), "pw")
+				if _, err4 := os.Stat(alt); err4 == nil {
+					script = alt
+				}
+			}
+		}
+		cmd := exec.Command(script, verb, key)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "pw command failed: %v\n", err)
+			os.Exit(1)
+		}
+
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", args[0])
 		os.Exit(1)
