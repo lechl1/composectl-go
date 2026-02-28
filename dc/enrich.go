@@ -1431,6 +1431,26 @@ func replaceEnvVarsInCompose(compose *ComposeFile) error {
 		envVars = make(map[string]string)
 	}
 
+	// Built-in variables resolved at highest priority
+	uid := os.Getuid()
+	gid := os.Getgid()
+	uidStr := strconv.Itoa(uid)
+	gidStr := strconv.Itoa(gid)
+	userDockerSock := fmt.Sprintf("/run/user/%d/docker.sock", uid)
+	var dockerSock string
+	if _, statErr := os.Stat(userDockerSock); statErr == nil {
+		dockerSock = userDockerSock
+	} else if _, statErr := os.Stat("/var/run/docker.sock"); statErr == nil {
+		dockerSock = "/var/run/docker.sock"
+	} else {
+		panic("no docker socket found: neither " + userDockerSock + " nor /var/run/docker.sock exists")
+	}
+	builtinVars := map[string]string{
+		"UID":         uidStr,
+		"GID":         gidStr,
+		"DOCKER_SOCK": dockerSock,
+	}
+
 	undefinedVars := make(map[string]bool)
 
 	// Helper to replace variables in a single string
@@ -1443,6 +1463,9 @@ func replaceEnvVarsInCompose(compose *ComposeFile) error {
 		re := regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 		s = re.ReplaceAllStringFunc(s, func(match string) string {
 			varName := match[2 : len(match)-1]
+			if v, ok := builtinVars[varName]; ok {
+				return v
+			}
 			if isSensitiveEnvironmentKey(varName, "") {
 				if v, ok := envVars[varName]; ok {
 					return v
@@ -1469,6 +1492,9 @@ func replaceEnvVarsInCompose(compose *ComposeFile) error {
 			if len(varName) > 0 && !regexp.MustCompile(`[A-Za-z0-9_]`).MatchString(string(varName[len(varName)-1])) {
 				trailing = string(varName[len(varName)-1])
 				varName = varName[:len(varName)-1]
+			}
+			if v, ok := builtinVars[varName]; ok {
+				return v + trailing
 			}
 			if isSensitiveEnvironmentKey(varName, "") {
 				if v, ok := envVars[varName]; ok {
@@ -1634,7 +1660,9 @@ func replaceEnvVarsInCompose(compose *ComposeFile) error {
 			if _, exists := newVolumes[newName]; exists {
 				fmt.Fprintf(os.Stderr, "Warning: volume key '%s' normalized to duplicate name '%s' - overwriting previous entry\n", name, newName)
 			}
-			newVolumes[newName] = vol
+			if !strings.Contains(newName, "/") {
+				newVolumes[newName] = vol
+			}
 		}
 		compose.Volumes = newVolumes
 	}

@@ -17,7 +17,7 @@ services:
       - ${HOME}/.local/containers:/containers
       # Docker socket — use whichever matches your Docker installation:
       # Rootless Docker (most common for non-root users):
-      - /run/user/${USER_ID}/docker.sock:/var/run/docker.sock
+      - ${DOCKER_SOCK}:/var/run/docker.sock
       # Standard root Docker:
       # - /var/run/docker.sock:/var/run/docker.sock
       # Provide the pw helper script into the container (read-only)
