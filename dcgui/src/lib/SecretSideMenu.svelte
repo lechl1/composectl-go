@@ -101,7 +101,7 @@
       />
       {#if row.entry.trim()}
         <button
-          class="shrink-0 text-base text-gray-600 hover:text-green-400 bg-white hover:bg-white rounded-r px-2 cursor-pointer"
+          class="shrink-0 text-base text-gray-600 hover:text-green-400 bg-white/10 hover:bg-white/80 rounded-r px-3 cursor-pointer"
           onclick={() => savePending(row.id)}
           title="Save secret"
         >💾</button>

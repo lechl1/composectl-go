@@ -14,6 +14,9 @@ var (
 	// ProdEnvPath is the path to the prod.env file
 	ProdEnvPath string
 
+	// SecretsManager is the executable used to manage secrets (default: "pw")
+	SecretsManager string
+
 	// initialized tracks whether paths have been initialized
 	initialized bool
 )
@@ -103,6 +106,11 @@ func InitPaths(args []string) {
 	defaultEnvPath := filepath.Join(StacksDir, "prod.env")
 	ProdEnvPath = getConfig("env_path", defaultEnvPath)
 
+	SecretsManager = getConfig("secrets_manager", "pw")
+	if SecretsManager == "" {
+		SecretsManager = "pw"
+	}
+
 	// Ensure directories exist
 	if err := os.MkdirAll(StacksDir, 0755); err != nil {
 		log.Printf("Warning: Failed to create directory %s: %v", StacksDir, err)
@@ -110,6 +118,7 @@ func InitPaths(args []string) {
 
 	log.Printf("Using stacks directory: %s", StacksDir)
 	log.Printf("Prod.env path: %s", ProdEnvPath)
+	log.Printf("Secrets manager: %s", SecretsManager)
 
 	initialized = true
 }

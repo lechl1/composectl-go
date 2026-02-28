@@ -2,11 +2,10 @@ package main
 
 import (
 	"bufio"
-	"crypto/rand"
 	"fmt"
 	"log"
-	"math/big"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -430,9 +429,8 @@ func ensureResourceDefaults(compose *ComposeFile) {
 	}
 }
 
-// enrichAndSanitizeCompose enriches and sanitizes a compose structure
-// If dryRun is true, it will not write to prod.env or files
-// NOTE: This function now operates in-place on the provided ComposeFile and does NOT
+// enrichAndSanitizeCompose enriches and sanitizes a compose structure.
+// NOTE: This function operates in-place on the provided ComposeFile and does NOT
 // perform any YAML serialization or return any bytes. Serialization is the caller's
 // responsibility so it can decide when to write or return YAML (for example only inside !dryRun).
 func enrichAndSanitizeCompose(compose *ComposeFile) {
@@ -543,327 +541,31 @@ func normalizeEnvKey(key string) string {
 	return strings.Trim(result.String(), "_")
 }
 
-// extractVariableReferences extracts variable names from strings containing ${XXX} or $XXX patterns
-func extractVariableReferences(value string) []string {
-	var variables []string
-
-	// Pattern 1: ${VAR_NAME}
-	i := 0
-	for i < len(value) {
-		if i+1 < len(value) && value[i] == '$' && value[i+1] == '{' {
-			// Found ${, now find the closing }
-			start := i + 2
-			end := start
-			for end < len(value) && value[end] != '}' {
-				end++
-			}
-			if end < len(value) {
-				varName := value[start:end]
-				if varName != "" {
-					variables = append(variables, varName)
-				}
-				i = end + 1
-				continue
-			}
-		}
-		// Pattern 2: $VAR_NAME (where VAR_NAME is uppercase letters, numbers, and underscores)
-		if value[i] == '$' && i+1 < len(value) {
-			start := i + 1
-			end := start
-			// Variable name must start with a letter or underscore
-			if (value[end] >= 'A' && value[end] <= 'Z') || (value[end] >= 'a' && value[end] <= 'z') || value[end] == '_' {
-				end++
-				// Continue with alphanumeric and underscore
-				for end < len(value) && ((value[end] >= 'A' && value[end] <= 'Z') ||
-					(value[end] >= 'a' && value[end] <= 'z') ||
-					(value[end] >= '0' && value[end] <= '9') ||
-					value[end] == '_') {
-					end++
-				}
-				varName := value[start:end]
-				if varName != "" {
-					variables = append(variables, varName)
-				}
-				i = end
-				continue
-			}
-		}
-		i++
-	}
-
-	return variables
-}
-
 // sanitizeComposePasswords sanitizes environment variables in a ComposeFile
-// by extracting plaintext passwords to prod.env and replacing them with variable references ${ENV_KEY}
-// If dryRun is true, it will skip writing to prod.env
+// by extracting plaintext passwords via `pw ins` and replacing them with variable references ${ENV_KEY}
 func sanitizeComposePasswords(compose *ComposeFile) {
-	// Read existing prod.env
-	envVars, err := readProdEnv(ProdEnvPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to read prod.env: %v\n", err)
-		envVars = make(map[string]string)
-	}
-
-	modified := false
-
-	// Process each service
 	for serviceName, service := range compose.Services {
-		// Process environment variables
 		envArray := normalizeEnvironment(service.Environment)
 		var sanitizedEnv []string
 		for _, envVar := range envArray {
-			// Split the environment variable into key and value
 			parts := strings.SplitN(envVar, "=", 2)
 			if len(parts) == 2 {
 				key := parts[0]
 				value := parts[1]
-
-				// Check if this is a sensitive variable using shared helper
-				isSensitive := isSensitiveEnvironmentKey(key, value)
-
-				// If sensitive and has a value, save to prod.env
-				if isSensitive && value != "" && !strings.HasPrefix(value, "${") && !strings.HasPrefix(value, "/run/secrets/") {
+				if isSensitiveEnvironmentKey(key, value) && value != "" && !strings.HasPrefix(value, "${") && !strings.HasPrefix(value, "/run/secrets/") {
 					normalizedKey := normalizeEnvKey(key)
-					// Passwords should not be fetched from runtime environment - only save to prod.env
-					if _, exists := envVars[normalizedKey]; !exists {
-						// Only save if not already in prod.env
-						envVars[normalizedKey] = value
-						modified = true
-						fmt.Fprintf(os.Stderr, "Extracted password '%s' to prod.env from service '%s'\n", normalizedKey, serviceName)
-					}
-				}
-
-				// Check if value contains variable references (${XXX} or $XXX) and is not sensitive
-				if !isSensitive && value != "" {
-					extractedVars := extractVariableReferences(value)
-					for _, varName := range extractedVars {
-						// Normalize the variable name before saving
-						normalizedVarName := normalizeEnvKey(varName)
-						// Check if variable is available in runtime environment
-						if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
-							fmt.Fprintf(os.Stderr, "Environment variable '%s' is available from runtime environment, skipping prod.env\n", normalizedVarName)
-						} else if _, exists := envVars[normalizedVarName]; !exists {
-							// Only add if not already in prod.env and not in runtime
-							envVars[normalizedVarName] = "" // Add with empty value as placeholder
-							modified = true
-							fmt.Fprintf(os.Stderr, "Added environment variable '%s' to prod.env from service '%s'\n", normalizedVarName, serviceName)
-						}
+					if err := pwIns(normalizedKey, value); err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: Failed to store secret '%s' from service '%s': %v\n", normalizedKey, serviceName, err)
 					}
 				}
 			}
-
-			// Sanitize the environment variable
 			sanitizedEnv = append(sanitizedEnv, sanitizeEnvironmentVariable(envVar))
 		}
 		service.Environment = sanitizedEnv
 		compose.Services[serviceName] = service
 	}
-
-	// Also process labels for variable references
-	for serviceName, service := range compose.Services {
-		// Process labels if they exist
-		if service.Labels != nil {
-			if labelArray, ok := service.Labels.([]interface{}); ok {
-				for _, label := range labelArray {
-					if labelStr, ok := label.(string); ok {
-						// Extract variable references from label values
-						parts := strings.SplitN(labelStr, "=", 2)
-						if len(parts) == 2 {
-							value := parts[1]
-							extractedVars := extractVariableReferences(value)
-							for _, varName := range extractedVars {
-								// Normalize the variable name before saving
-								normalizedVarName := normalizeEnvKey(varName)
-								// Check if variable is available in runtime environment
-								if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
-									fmt.Fprintf(os.Stderr, "Environment variable '%s' is available from runtime environment, skipping prod.env\n", normalizedVarName)
-								} else if _, exists := envVars[normalizedVarName]; !exists {
-									// Only add if not already in prod.env and not in runtime
-									envVars[normalizedVarName] = "" // Add with empty value as placeholder
-									modified = true
-									fmt.Fprintf(os.Stderr, "Added environment variable '%s' to prod.env from service '%s' labels\n", normalizedVarName, serviceName)
-								}
-							}
-						}
-					}
-				}
-			} else if labelMap, ok := service.Labels.(map[string]interface{}); ok {
-				for _, value := range labelMap {
-					if valueStr, ok := value.(string); ok {
-						extractedVars := extractVariableReferences(valueStr)
-						for _, varName := range extractedVars {
-							// Normalize the variable name before saving
-							normalizedVarName := normalizeEnvKey(varName)
-							// Check if variable is available in runtime environment
-							if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
-								fmt.Fprintf(os.Stderr, "Environment variable '%s' is available from runtime environment, skipping prod.env\n", normalizedVarName)
-							} else if _, exists := envVars[normalizedVarName]; !exists {
-								// Only add if not already in prod.env and not in runtime
-								envVars[normalizedVarName] = "" // Add with empty value as placeholder
-								modified = true
-								fmt.Fprintf(os.Stderr, "Added environment variable '%s' to prod.env from service '%s' labels\n", normalizedVarName, serviceName)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Also process configs for variable references
-	if compose.Configs != nil {
-		for configName, config := range compose.Configs {
-			// Extract variable references from config content
-			if config.Content != "" {
-				extractedVars := extractVariableReferences(config.Content)
-				for _, varName := range extractedVars {
-					// Normalize the variable name before saving
-					normalizedVarName := normalizeEnvKey(varName)
-					// Check if variable is available in runtime environment
-					if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
-						fmt.Fprintf(os.Stderr, "Environment variable '%s' is available from runtime environment, skipping prod.env\n", normalizedVarName)
-					} else if _, exists := envVars[normalizedVarName]; !exists {
-						// Only add if not already in prod.env and not in runtime
-						envVars[normalizedVarName] = "" // Add with empty value as placeholder
-						modified = true
-						fmt.Fprintf(os.Stderr, "Added environment variable '%s' to prod.env from config '%s'\n", normalizedVarName, configName)
-					}
-				}
-			}
-			// Also extract from file path if it exists
-			if config.File != "" {
-				extractedVars := extractVariableReferences(config.File)
-				for _, varName := range extractedVars {
-					normalizedVarName := normalizeEnvKey(varName)
-					// Check if variable is available in runtime environment
-					if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
-						fmt.Fprintf(os.Stderr, "Environment variable '%s' is available from runtime environment, skipping prod.env\n", normalizedVarName)
-					} else if _, exists := envVars[normalizedVarName]; !exists {
-						// Only add if not already in prod.env and not in runtime
-						envVars[normalizedVarName] = ""
-						modified = true
-						fmt.Fprintf(os.Stderr, "Added environment variable '%s' to prod.env from config '%s' file path\n", normalizedVarName, configName)
-					}
-				}
-			}
-		}
-	}
-
-	// Process volumes for variable references
-	if compose.Volumes != nil {
-		for volumeName, volume := range compose.Volumes {
-			if volume.Name != "" {
-				extractedVars := extractVariableReferences(volume.Name)
-				for _, varName := range extractedVars {
-					normalizedVarName := normalizeEnvKey(varName)
-					// Check if variable is available in runtime environment
-					if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
-						fmt.Fprintf(os.Stderr, "Environment variable '%s' is available from runtime environment, skipping prod.env\n", normalizedVarName)
-					} else if _, exists := envVars[normalizedVarName]; !exists {
-						// Only add if not already in prod.env and not in runtime
-						envVars[normalizedVarName] = ""
-						modified = true
-						fmt.Fprintf(os.Stderr, "Added environment variable '%s' to prod.env from volume '%s'\n", normalizedVarName, volumeName)
-					}
-				}
-			}
-			if volume.DriverOpts != nil {
-				for _, optValue := range volume.DriverOpts {
-					extractedVars := extractVariableReferences(optValue)
-					for _, varName := range extractedVars {
-						normalizedVarName := normalizeEnvKey(varName)
-						// Check if variable is available in runtime environment
-						if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
-							fmt.Fprintf(os.Stderr, "Environment variable '%s' is available from runtime environment, skipping prod.env\n", normalizedVarName)
-						} else if _, exists := envVars[normalizedVarName]; !exists {
-							// Only add if not already in prod.env and not in runtime
-							envVars[normalizedVarName] = ""
-							modified = true
-							fmt.Fprintf(os.Stderr, "Added environment variable '%s' to prod.env from volume '%s' driver opts\n", normalizedVarName, volumeName)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Process service-level fields for variable references
-	for serviceName, service := range compose.Services {
-		// Process volumes mount paths
-		for _, volumeMount := range service.Volumes {
-			extractedVars := extractVariableReferences(volumeMount)
-			for _, varName := range extractedVars {
-				normalizedVarName := normalizeEnvKey(varName)
-				// Check if variable is available in runtime environment
-				if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
-					fmt.Fprintf(os.Stderr, "Environment variable '%s' is available from runtime environment, skipping prod.env\n", normalizedVarName)
-				} else if _, exists := envVars[normalizedVarName]; !exists {
-					// Only add if not already in prod.env and not in runtime
-					envVars[normalizedVarName] = ""
-					modified = true
-					fmt.Fprintf(os.Stderr, "Added environment variable '%s' to prod.env from service '%s' volume mounts\n", normalizedVarName, serviceName)
-				}
-			}
-		}
-
-		// Process command field
-		if service.Command != nil {
-			var commandStrings []string
-			switch cmd := service.Command.(type) {
-			case string:
-				commandStrings = []string{cmd}
-			case []interface{}:
-				for _, c := range cmd {
-					if cmdStr, ok := c.(string); ok {
-						commandStrings = append(commandStrings, cmdStr)
-					}
-				}
-			}
-			for _, cmdStr := range commandStrings {
-				extractedVars := extractVariableReferences(cmdStr)
-				for _, varName := range extractedVars {
-					normalizedVarName := normalizeEnvKey(varName)
-					// Check if variable is available in runtime environment
-					if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
-						fmt.Fprintf(os.Stderr, "Environment variable '%s' is available from runtime environment, skipping prod.env\n", normalizedVarName)
-					} else if _, exists := envVars[normalizedVarName]; !exists {
-						// Only add if not already in prod.env and not in runtime
-						envVars[normalizedVarName] = ""
-						modified = true
-						fmt.Fprintf(os.Stderr, "Added environment variable '%s' to prod.env from service '%s' command\n", normalizedVarName, serviceName)
-					}
-				}
-			}
-		}
-
-		// Process image field
-		if service.Image != "" {
-			extractedVars := extractVariableReferences(service.Image)
-			for _, varName := range extractedVars {
-				normalizedVarName := normalizeEnvKey(varName)
-				// Check if variable is available in runtime environment
-				if runtimeValue := os.Getenv(normalizedVarName); runtimeValue != "" {
-					fmt.Fprintf(os.Stderr, "Environment variable '%s' is available from runtime environment, skipping prod.env\n", normalizedVarName)
-				} else if _, exists := envVars[normalizedVarName]; !exists {
-					// Only add if not already in prod.env and not in runtime
-					envVars[normalizedVarName] = ""
-					modified = true
-					fmt.Fprintf(os.Stderr, "Added environment variable '%s' to prod.env from service '%s' image\n", normalizedVarName, serviceName)
-				}
-			}
-		}
-	}
-
-	// Write back to prod.env if modified (skip if dry run)
-	if modified {
-		if err := writeProdEnv(ProdEnvPath, envVars); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Failed to write prod.env: %v\n", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "Updated prod.env with extracted passwords and environment variables\n")
-		}
-	}
 }
+
 func enrichWithProxy(service *ComposeService, serviceName string) {
 	fmt.Fprintf(os.Stderr, "Enriching service '%s' with proxy labels if applicable...\n", serviceName)
 
@@ -1078,10 +780,8 @@ func getLowestPrivilegedPort(service ComposeService, labelsMap map[string]string
 }
 
 // processSecrets scans environment variables for /run/secrets/ references
-// and ensures the corresponding secrets are declared at both service and top level
-// processSecrets scans environment variables for /run/secrets/ references
-// and ensures the corresponding secrets are declared at both service and top level
-// If dryRun is true, it will not write to prod.env (no file system modifications)
+// and ensures the corresponding secrets are declared at both service and top level.
+// Missing secrets are generated via `pw gen`.
 func processSecrets(compose *ComposeFile) {
 	// Track all secrets that need to be declared at top level
 	requiredSecrets := make(map[string]bool)
@@ -1154,33 +854,44 @@ func processSecrets(compose *ComposeFile) {
 		}
 	}
 
-	if len(requiredSecrets) > 0 {
-		secretNames := make([]string, 0, len(requiredSecrets))
-		for secretName := range requiredSecrets {
-			secretNames = append(secretNames, secretName)
-		}
-		if err := ensureSecretsInProdEnv(secretNames); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Failed to ensure secrets in prod.env: %v\n", err)
+	for secretName := range requiredSecrets {
+		if err := pwGen(secretName); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to generate secret '%s': %v\n", secretName, err)
 		}
 	}
 }
 
-// generateRandomPassword generates a secure random password using safe characters
-// Characters: A-Z, a-z, 0-9, ._+-
-// Length: 24 characters
-func generateRandomPassword(length int) (string, error) {
-	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._+-"
-	password := make([]byte, length)
-
-	for i := range password {
-		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
-		if err != nil {
-			return "", fmt.Errorf("failed to generate random number: %w", err)
+// pwGen calls `<secrets_manager> gen KEY` to generate and store a new password.
+// If the key already exists in the store, it silently succeeds.
+func pwGen(secretName string) error {
+	cmd := exec.Command(SecretsManager, "gen", secretName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(output), "key already exists") {
+			fmt.Fprintf(os.Stderr, "Secret '%s' already exists in %s store\n", secretName, SecretsManager)
+			return nil
 		}
-		password[i] = charset[num.Int64()]
+		return fmt.Errorf("%s gen %s: %w: %s", SecretsManager, secretName, err, strings.TrimSpace(string(output)))
 	}
+	fmt.Fprintf(os.Stderr, "Generated new secret '%s' via %s\n", secretName, SecretsManager)
+	return nil
+}
 
-	return string(password), nil
+// pwIns calls `<secrets_manager> ins KEY` with the given value on stdin.
+// If the key already exists in the store, it silently succeeds.
+func pwIns(secretName, value string) error {
+	cmd := exec.Command(SecretsManager, "ins", secretName)
+	cmd.Stdin = strings.NewReader(value)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(output), "key already exists") {
+			fmt.Fprintf(os.Stderr, "Secret '%s' already exists in %s store\n", secretName, SecretsManager)
+			return nil
+		}
+		return fmt.Errorf("%s ins %s: %w: %s", SecretsManager, secretName, err, strings.TrimSpace(string(output)))
+	}
+	fmt.Fprintf(os.Stderr, "Stored secret '%s' via %s\n", secretName, SecretsManager)
+	return nil
 }
 
 // readProdEnv reads the prod.env file and returns a map of environment variables
@@ -1341,84 +1052,6 @@ func sanitizeForLog(value string) string {
 		return "***"
 	}
 	return value[:3] + "***"
-}
-
-// writeProdEnv writes environment variables to the prod.env file
-func writeProdEnv(filePath string, envVars map[string]string) error {
-	// Create a sorted list of keys for consistent output
-	keys := make([]string, 0, len(envVars))
-	for key := range envVars {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	// Create or truncate the file
-	file, err := os.Create(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to create prod.env: %w", err)
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-
-	// Write header comment
-	fmt.Fprintln(writer, "# Auto-generated secrets for Docker Compose")
-	fmt.Fprintln(writer, "# This file is managed automatically by dc")
-	fmt.Fprintln(writer, "# Do not edit manually unless you know what you are doing")
-	fmt.Fprintln(writer, "")
-
-	// Write all environment variables
-	for _, key := range keys {
-		fmt.Fprintf(writer, "%s=%s\n", key, envVars[key])
-	}
-
-	if err := writer.Flush(); err != nil {
-		return fmt.Errorf("failed to write prod.env: %w", err)
-	}
-
-	return nil
-}
-
-// ensureSecretsInProdEnv ensures all required secrets exist in prod.env file
-// Creates missing secrets with randomly generated passwords
-func ensureSecretsInProdEnv(secretNames []string) error {
-	const passwordLength = 24
-
-	// Read existing prod.env
-	envVars, err := readProdEnv(ProdEnvPath)
-	if err != nil {
-		return err
-	}
-
-	modified := false
-
-	// Check each secret
-	for _, secretName := range secretNames {
-		// Secrets should not be fetched from runtime environment - only from prod.env
-		if _, exists := envVars[secretName]; !exists {
-			// Generate a new password
-			password, err := generateRandomPassword(passwordLength)
-			if err != nil {
-				return fmt.Errorf("failed to generate password for %s: %w", secretName, err)
-			}
-
-			envVars[secretName] = password
-			modified = true
-			fmt.Fprintf(os.Stderr, "Generated new secret '%s' in prod.env\n", secretName)
-		} else {
-			fmt.Fprintf(os.Stderr, "Secret '%s' already exists in prod.env\n", secretName)
-		}
-	}
-
-	// Write back to file if modified
-	if modified {
-		if err := writeProdEnv(ProdEnvPath, envVars); err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stderr, "Updated prod.env with %d new secret(s)\n", len(secretNames))
-	}
-
-	return nil
 }
 
 // replaceEnvVarsInCompose replaces ${VAR} and $VAR placeholders within a ComposeFile struct

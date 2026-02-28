@@ -124,11 +124,7 @@ func main() {
 				cmdArgs[0] = "ls"
 			}
 		}
-		// Determine helper executable via configuration key `secrets_manager` (falls back to "pw").
-		script := getConfig("secrets_manager", "pw")
-		if script == "" {
-			script = "pw"
-		}
+		script := SecretsManager
 		// If script is a simple name, prefer PATH; otherwise if it contains a path use that directly when present.
 		if !strings.ContainsAny(script, string(os.PathSeparator)) {
 			if _, err := exec.LookPath(script); err != nil {
