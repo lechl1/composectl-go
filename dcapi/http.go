@@ -37,28 +37,27 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(segments) < 1 {
-		http.Error(w, "invalid path", http.StatusBadRequest)
-		return
-	}
 	stackName := segments[0]
-	actionName := segments[1]
-	switch actionName {
-	case "stop", "start", "up", "down", "create", "view":
-		if r.Method == http.MethodPost || r.Method == http.MethodPut {
-			HandleAction(w, "dc", actionName, stackName)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if len(segments) == 2 {
+		actionName := segments[1]
+		switch actionName {
+		case "stop", "start", "up", "down", "create":
+			if r.Method == http.MethodPost || r.Method == http.MethodPut {
+				HandleAction(w, "dc", actionName, stackName)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		case "logs", "view":
+			if r.Method == http.MethodGet {
+				HandleAction(w, "dc", actionName, stackName)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		default:
+			http.Error(w, "Not found", http.StatusNotFound)
 		}
-	case "logs", "list", "ls":
-		if r.Method == http.MethodGet {
-			HandleAction(w, "dc", actionName, stackName)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	default:
-		http.Error(w, "Not found", http.StatusNotFound)
 	}
+	http.Error(w, "Not found", http.StatusNotFound)
 }
 
 func HandleAction(w http.ResponseWriter, args ...string) {

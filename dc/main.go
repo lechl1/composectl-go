@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -94,33 +92,25 @@ func main() {
 			if err != nil {
 				die("%v", err)
 			}
-			r := &http.Request{
-				Method: http.MethodPut,
-				URL:    &url.URL{Path: "/api/stacks/" + name + "/start"},
-				Body:   io.NopCloser(bytes.NewReader(yamlBody)),
-			}
-			HandleStartStack(writer, r)
+			HandleStartStack(writer, yamlBody, "/api/stacks/"+name+"/start")
 		case "stop":
 			if len(args) < 3 {
 				die("Usage: dc stack stop <name>")
 			}
 			name := args[2]
-			r := &http.Request{Method: http.MethodPut, URL: &url.URL{Path: "/api/stacks/" + name + "/stop"}}
-			HandleStopStack(writer, r)
-		case "down", "rm", "remove":
+			HandleStopStack(writer, nil, "/api/stacks/"+name+"/stop")
+		case "down", "rm", "remove", "del", "delete":
 			if len(args) < 3 {
 				die("Usage: dc stack %s <name>", cmd)
 			}
 			name := args[2]
-			r := &http.Request{Method: http.MethodDelete, URL: &url.URL{Path: "/api/stacks/" + name}}
-			HandleDeleteStack(writer, r)
+			HandleDeleteStack(writer, nil, "/api/stacks/"+name)
 		case "logs":
 			if len(args) < 3 {
 				die("Usage: dc stack logs <name>")
 			}
 			name := args[2]
-			r := &http.Request{Method: http.MethodGet, URL: &url.URL{Path: "/api/stacks/" + name + "/logs"}}
-			HandleStreamStackLogs(writer, r)
+			HandleStreamStackLogs(writer, nil, "/api/stacks/"+name+"/logs")
 		default:
 			die("Unknown stack command: %s", cmd)
 		}
@@ -218,7 +208,6 @@ func findRunningStackConfigFile(name string) string {
 				if kv[0] == "com.docker.compose.project.config_files" {
 					// config_files may be comma-separated; return the first one
 					files := strings.SplitN(kv[1], ",", 2)
-					os.Stdout.Write([]byte(kv[1]))
 					return strings.TrimSpace(files[0])
 				}
 			}

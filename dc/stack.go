@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -668,53 +667,43 @@ func getEffectiveComposeFile(stackName string) string {
 
 // HandleStopStack handles POST /api/stacks/{name}/stop
 // Stops all containers in a Docker Compose stack
-func HandleStopStack(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+func HandleStopStack(w http.ResponseWriter, body []byte, path string) {
 	// Extract stack name from URL path
 	// Expected format: /api/stacks/{name}/stop
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(pathParts) < 3 || pathParts[0] != "api" || pathParts[1] != "stacks" {
-		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
 		return
 	}
 
 	stackName := pathParts[2]
 	if stackName == "" {
-		http.Error(w, "Stack name is required", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Stack name is required\n")
 		return
 	}
 
-	HandleDockerComposeFile(w, r, stackName, false, ComposeActionStop)
+	HandleDockerComposeFile(w, body, path, stackName, false, ComposeActionStop)
 }
 
 // HandleStartStack handles POST /api/stacks/{name}/start
 // Starts all containers in a Docker Compose stack
-func HandleStartStack(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+func HandleStartStack(w http.ResponseWriter, body []byte, path string) {
 	// Extract stack name from URL path
 	// Expected format: /api/stacks/{name}/start
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(pathParts) < 3 || pathParts[0] != "api" || pathParts[1] != "stacks" {
-		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
 		return
 	}
 
 	stackName := pathParts[2]
 	if stackName == "" {
-		http.Error(w, "Stack name is required", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Stack name is required\n")
 		return
 	}
 
 	log.Printf("Starting stack: %s", stackName)
-	HandleDockerComposeFile(w, r, stackName, false, ComposeActionUp)
+	HandleDockerComposeFile(w, body, path, stackName, false, ComposeActionUp)
 }
 
 // findContainersByProjectName finds all containers that match the given project name label
@@ -888,18 +877,18 @@ func reconstructComposeFromContainers(inspectData []DockerInspect) (string, erro
 // HandleGetStack handles GET /api/stacks/{name}
 // Serves the YAML file for the specified stack from the stacks directory
 // If the file doesn't exist, reconstructs it from running containers
-func HandleGetStack(w http.ResponseWriter, r *http.Request) {
+func HandleGetStack(w http.ResponseWriter, body []byte, path string) {
 	// Extract stack name from URL path
 	// Expected format: /api/stacks/{name}
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(pathParts) < 3 || pathParts[0] != "api" || pathParts[1] != "stacks" {
-		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
 		return
 	}
 
 	stackName := pathParts[2]
 	if stackName == "" {
-		http.Error(w, "Stack name is required", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Stack name is required\n")
 		return
 	}
 
@@ -918,13 +907,13 @@ func HandleGetStack(w http.ResponseWriter, r *http.Request) {
 		containerIDs, err := findContainersByProjectName(stackName)
 		if err != nil {
 			log.Printf("Error finding containers for stack %s: %v", stackName, err)
-			http.Error(w, "Stack not found and failed to find containers", http.StatusNotFound)
+			fmt.Fprintf(os.Stderr, "Stack not found and failed to find containers\n")
 			return
 		}
 
 		if len(containerIDs) == 0 {
 			log.Printf("No containers found for stack %s", stackName)
-			http.Error(w, "Stack not found", http.StatusNotFound)
+			fmt.Fprintf(os.Stderr, "Stack not found\n")
 			return
 		}
 
@@ -932,7 +921,7 @@ func HandleGetStack(w http.ResponseWriter, r *http.Request) {
 		inspectData, err := inspectContainers(containerIDs)
 		if err != nil {
 			log.Printf("Error inspecting containers for stack %s: %v", stackName, err)
-			http.Error(w, "Failed to inspect containers", http.StatusInternalServerError)
+			fmt.Fprintf(os.Stderr, "Failed to inspect containers\n")
 			return
 		}
 
@@ -940,7 +929,7 @@ func HandleGetStack(w http.ResponseWriter, r *http.Request) {
 		yamlContent, err := reconstructComposeFromContainers(inspectData)
 		if err != nil {
 			log.Printf("Error reconstructing compose file for stack %s: %v", stackName, err)
-			http.Error(w, "Failed to reconstruct compose file", http.StatusInternalServerError)
+			fmt.Fprintf(os.Stderr, "Failed to reconstruct compose file\n")
 			return
 		}
 
@@ -951,54 +940,42 @@ func HandleGetStack(w http.ResponseWriter, r *http.Request) {
 		content, err = os.ReadFile(filePath)
 		if err != nil {
 			log.Printf("Error reading stack file %s: %v", filePath, err)
-			http.Error(w, "Failed to read stack file", http.StatusInternalServerError)
+			fmt.Fprintf(os.Stderr, "Failed to read stack file\n")
 			return
 		}
 	}
 
 	// Serve the file content as text/plain
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
 	w.Write(content)
 }
 
 // HandlePutStack handles PUT /api/stacks/{name}
 // Updates the YAML file for the specified stack
-func HandlePutStack(w http.ResponseWriter, r *http.Request) {
+func HandlePutStack(w http.ResponseWriter, body []byte, path string) {
 	// Extract stack name from URL path
 	// Expected format: /api/stacks/{name}
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(pathParts) < 3 || pathParts[0] != "api" || pathParts[1] != "stacks" {
-		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
 		return
 	}
 
 	stackName := pathParts[2]
 	if stackName == "" {
-		http.Error(w, "Stack name is required", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Stack name is required\n")
 		return
 	}
 
-	HandleDockerComposeFile(w, r, stackName, false, ComposeActionNone)
+	HandleDockerComposeFile(w, body, path, stackName, false, ComposeActionNone)
 }
 
-func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName string, dryRun bool, action ComposeAction) {
-	// Read the request body
-	body, err := io.ReadAll(r.Body)
-	defer r.Body.Close()
-
-	if err != nil {
-		log.Printf("Error reading request body: %v", err)
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
-		return
-	}
-
+func HandleDockerComposeFile(w http.ResponseWriter, body []byte, path string, stackName string, dryRun bool, action ComposeAction) {
 	// First, sanitize passwords and extract them to prod.env
 	// This must be done BEFORE enrichment to capture plaintext passwords
 	var modifiedComposeFile ComposeFile
 	if err := yaml.Unmarshal(body, &modifiedComposeFile); err != nil {
 		log.Printf("Error parsing YAML for sanitization: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to parse YAML: %v", err), http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Failed to parse YAML: %v\n", err)
 		return
 	}
 	sanitizeComposePasswords(&modifiedComposeFile)
@@ -1007,7 +984,7 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 	var originalComposeYamlBuffer strings.Builder
 	if err := encodeYAMLWithMultiline(&originalComposeYamlBuffer, modifiedComposeFile); err != nil {
 		log.Printf("Failed to serialize original YAML: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to serialize original YAML: %v", err), http.StatusInternalServerError)
+		fmt.Fprintf(os.Stderr, "Failed to serialize original YAML: %v\n", err)
 		return
 	}
 
@@ -1017,16 +994,12 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 	var modifiedComposeYamlBuffer strings.Builder
 	if err := encodeYAMLWithMultiline(&modifiedComposeYamlBuffer, modifiedComposeFile); err != nil {
 		log.Printf("Failed to serialize modified YAML: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to serialize modified YAML: %v", err), http.StatusInternalServerError)
+		fmt.Fprintf(os.Stderr, "Failed to serialize modified YAML: %v\n", err)
 		return
 	}
 
 	var cmd *exec.Cmd
 	var actionName string
-	// Set up streaming headers before docker modifiedComposeFile up/down
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Transfer-Encoding", "chunked")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 
 	if dryRun {
@@ -1037,14 +1010,14 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 	case ComposeActionUp:
 		actionName = "up"
 		// Create missing networks and volumes before docker modifiedComposeFile up/down
-		if err = ensureNetworksExist(&modifiedComposeFile, w); err != nil {
+		if err := ensureNetworksExist(&modifiedComposeFile, w); err != nil {
 			log.Printf("Error ensuring networks exist for stack %s: %v", stackName, err)
 			fmt.Fprintf(w, "[ERROR] Failed to ensure networks exist: %v\n", err)
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
 			}
 		}
-		if err = ensureVolumesExist(&modifiedComposeFile, w); err != nil {
+		if err := ensureVolumesExist(&modifiedComposeFile, w); err != nil {
 			log.Printf("Error ensuring volumes exist for stack %s: %v", stackName, err)
 			fmt.Fprintf(w, "[ERROR] Failed to ensure volumes exist: %v\n", err)
 			if flusher, ok := w.(http.Flusher); ok {
@@ -1089,7 +1062,7 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 		// Ensure the stacks directory exists
 		if err := os.MkdirAll(StacksDir, 0755); err != nil {
 			log.Printf("Error creating stacks directory: %v", err)
-			http.Error(w, "Failed to create stacks directory", http.StatusInternalServerError)
+			fmt.Fprintf(os.Stderr, "Failed to create stacks directory\n")
 			return
 		}
 
@@ -1100,14 +1073,14 @@ func HandleDockerComposeFile(w http.ResponseWriter, r *http.Request, stackName s
 		// Write the original file (sanitized user-provided content without plaintext passwords)
 		if err := os.WriteFile(originalFilePath, []byte(originalComposeYamlBuffer.String()), 0644); err != nil {
 			log.Printf("Error writing original stack file %s: %v", originalFilePath, err)
-			http.Error(w, "Failed to write original stack file", http.StatusInternalServerError)
+			fmt.Fprintf(os.Stderr, "Failed to write original stack file\n")
 			return
 		}
 
 		// Write the effective file (enriched and sanitized - no plaintext passwords)
 		if err := os.WriteFile(effectiveFilePath, []byte(modifiedComposeYamlBuffer.String()), 0644); err != nil {
 			log.Printf("Error writing effective stack file %s: %v", effectiveFilePath, err)
-			http.Error(w, "Failed to write effective stack file", http.StatusInternalServerError)
+			fmt.Fprintf(os.Stderr, "Failed to write effective stack file\n")
 			return
 		}
 		log.Printf("Successfully persisted stack: %s (original: %s, effective: %s)", stackName, originalFilePath, effectiveFilePath)
@@ -1127,7 +1100,7 @@ func serializeYamlWithPlainTextSecrets(w http.ResponseWriter, modifiedComposeFil
 	var modifiedComposeYamlWithPlainTextSecretsBuffer strings.Builder
 	if err := encodeYAMLWithMultiline(&modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeFile); err != nil {
 		log.Printf("Failed to serialize modified YAML with secrets: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to serialize modified YAML with secrets: %v", err), http.StatusInternalServerError)
+		fmt.Fprintf(os.Stderr, "Failed to serialize modified YAML with secrets: %v\n", err)
 		return strings.Builder{}, "", true
 	}
 	var modifiedComposeYamlWithPlainTextSecrets = modifiedComposeYamlWithPlainTextSecretsBuffer.String()
@@ -1298,23 +1271,18 @@ func ensureVolumesExist(compose *ComposeFile, w http.ResponseWriter) error {
 	return nil
 }
 
-func HandleStreamStackLogs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+func HandleStreamStackLogs(w http.ResponseWriter, body []byte, path string) {
 	// Extract stack name from URL path
 	// Expected format: /api/stacks/{name}/logs
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(pathParts) < 4 || pathParts[0] != "api" || pathParts[1] != "stacks" || pathParts[3] != "logs" {
-		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
 		return
 	}
 
 	stackName := pathParts[2]
 	if stackName == "" {
-		http.Error(w, "Stack name is required", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Stack name is required\n")
 		return
 	}
 
@@ -1323,39 +1291,30 @@ func HandleStreamStackLogs(w http.ResponseWriter, r *http.Request) {
 	// Command to stream logs
 	cmd := exec.Command("docker-compose", "-f", GetStackPath(stackName, true), "logs", "-f")
 
-	// Set headers for streaming
-	w.Header().Set("Content-Type", "text/plain")
-	w.WriteHeader(http.StatusOK)
-
 	// Stream logs to the response
 	err := streamCommandOutput(w, cmd)
 	if err != nil {
 		log.Printf("Error streaming logs for stack %s: %v", stackName, err)
-		http.Error(w, "Failed to stream logs", http.StatusInternalServerError)
+		fmt.Fprintf(os.Stderr, "Failed to stream logs\n")
 	}
 }
 
-func HandleDeleteStack(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+func HandleDeleteStack(w http.ResponseWriter, body []byte, path string) {
 	// Extract stack name from URL path
 	// Expected format: /api/stacks/{name}
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(pathParts) < 3 || pathParts[0] != "api" || pathParts[1] != "stacks" {
-		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
 		return
 	}
 
 	stackName := pathParts[2]
 	if stackName == "" {
-		http.Error(w, "Stack name is required", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Stack name is required\n")
 		return
 	}
 
-	HandleDockerComposeFile(w, r, stackName, false, ComposeActionDown)
+	HandleDockerComposeFile(w, body, path, stackName, false, ComposeActionDown)
 }
 
 // getStacksData returns the combined stacks data (same as GET /api/stacks)

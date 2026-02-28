@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"net/http"
@@ -876,7 +877,9 @@ func HandleEnrichStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	HandleDockerComposeFile(w, r, stackName, true, ComposeActionNone)
+	body, _ := io.ReadAll(r.Body)
+	r.Body.Close()
+	HandleDockerComposeFile(w, body, r.URL.Path, stackName, true, ComposeActionNone)
 }
 
 // addUndeclaredNetworksAndVolumes analyzes services and adds any undeclared networks and volumes
@@ -1688,5 +1691,7 @@ func HandleEnrichYAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	HandleDockerComposeFile(w, r, stackName, false, ComposeActionNone)
+	body, _ := io.ReadAll(r.Body)
+	r.Body.Close()
+	HandleDockerComposeFile(w, body, r.URL.Path, stackName, false, ComposeActionNone)
 }
