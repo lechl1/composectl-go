@@ -877,14 +877,35 @@ func HandleDockerComposeFile(body []byte, stackName string, dryRun bool, action 
 	case ComposeActionDown:
 		actionName = "down"
 		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
-			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down", "--wait", "--remove-orphans")
+			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, actionName, "--wait", "--remove-orphans")
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
 			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
 		}
 	case ComposeActionStop:
 		actionName = "stop"
 		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
-			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "stop")
+			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, actionName)
+			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
+			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
+		}
+	case ComposeActionRemove:
+		actionName = "rm"
+		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
+			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, actionName, "-f")
+			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
+			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
+		}
+	case ComposeActionStart:
+		actionName = "start"
+		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
+			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, actionName)
+			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
+			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
+		}
+	case ComposeActionCreate:
+		actionName = "create"
+		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
+			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, actionName)
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
 			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
 		}
@@ -902,7 +923,7 @@ func HandleDockerComposeFile(body []byte, stackName string, dryRun bool, action 
 		log.Printf("Successfully executed docker modifiedComposeFile %s for stack %s", actionName, stackName)
 	}
 
-	if action == ComposeActionNone || action == ComposeActionUp {
+	if action == ComposeActionNone || action == ComposeActionUp || action == ComposeActionCreate {
 		// Ensure the stacks directory exists
 		if err := os.MkdirAll(StacksDir, 0755); err != nil {
 			log.Printf("Error creating stacks directory: %v", err)

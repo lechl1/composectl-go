@@ -73,9 +73,10 @@ type ComposeAction int
 
 const (
 	ComposeActionNone   ComposeAction = iota
-	ComposeActionUp     ComposeAction = iota
-	ComposeActionDown   ComposeAction = iota
+	ComposeActionCreate ComposeAction = iota
 	ComposeActionRemove ComposeAction = iota
 	ComposeActionStart  ComposeAction = iota
 	ComposeActionStop   ComposeAction = iota
+	ComposeActionUp     ComposeAction = iota
+	ComposeActionDown   ComposeAction = iota
 )
