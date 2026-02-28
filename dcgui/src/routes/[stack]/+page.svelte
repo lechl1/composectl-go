@@ -2,7 +2,6 @@
   import YamlEditor from "$lib/YamlEditor.svelte";
   import StackSideMenu from "$lib/StackSideMenu.svelte";
   import { page } from "$app/stores";
-  import { fetchStackDoc } from "$lib/stackManager.js";
 
   let selectedStack = $state("");
 

@@ -102,9 +102,9 @@ async function ftch({ url, log, successMessage, errorMessage, ...options }) {
                 throw `Stream aborted: ${err}`
               }
             }));
-            return { text: responseText.join(''), success: true };
+            return responseText.join('');
           } else {
-            return { text: await response.text(), success: true };
+            return await response.text();
           }
         } else {
           throw response.statusText;
@@ -113,12 +113,11 @@ async function ftch({ url, log, successMessage, errorMessage, ...options }) {
       .then(result => {
         log(`\n${result.text}`);
         log(`\n✅ ${successMessage}`);
-        return { text: result.text, success: true };
       })
       .catch(responseText => {
         log(`\n${responseText}`);
         log(`\n❌ ${errorMessage}`);
-        return { text: responseText, success: false };
+        throw responseText
       });
 }
 

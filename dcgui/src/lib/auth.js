@@ -13,37 +13,28 @@ function gotoRoot() {
  */
 export async function authFetch(url, options = {}) {
   // Add authorization header if token exists
-  if (browser) {
-    const token = localStorage.getItem("authToken");
-    if (token) {
-      options.headers = {
-        ...options.headers,
-        "Authorization": `Bearer ${token}`,
-      };
+  if (!browser) {
+    return
+  }
+  const token = localStorage.getItem("authToken");
+  if (token) {
+    options.headers = {
+      ...options.headers,
+      "Authorization": `Bearer ${token}`,
+    };
+  }
+  const response = await fetch(url, options);
+
+  // Check for authentication errors
+  if (response.status === 401 || response.status === 403) {
+    if (browser) {
+      localStorage.removeItem("authToken");
+      gotoRoot();
     }
+    throw new Error("Unauthorized");
   }
 
-  try {
-    const response = await fetch(url, options);
-
-    // Check for authentication errors
-    if (response.status === 401 || response.status === 403) {
-      if (browser) {
-        localStorage.removeItem("authToken");
-        gotoRoot();
-      }
-      throw new Error("Unauthorized");
-    }
-
-    return response;
-  } catch (error) {
-    // Re-throw if it's our auth error
-    if (error.message === "Unauthorized") {
-      throw error;
-    }
-    // For network errors or other issues, also check if we should redirect
-    throw error;
-  }
+  return response;
 }
 
 /**
