@@ -857,9 +857,9 @@ func enrichWithProxy(service *ComposeService, serviceName string) {
 
 // HandleEnrichStack handles POST /api/enrich/{name}
 // Enriches the provided docker-compose YAML without modifying files or creating secrets
-func HandleEnrichStack(w http.ResponseWriter, r *http.Request) {
+func HandleEnrichStack(r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		fmt.Fprintf(os.Stderr, "Method not allowed\n")
 		return
 	}
 
@@ -867,19 +867,19 @@ func HandleEnrichStack(w http.ResponseWriter, r *http.Request) {
 	// Expected format: /api/stacks/{name}/enrich
 	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	if len(pathParts) < 4 || pathParts[0] != "api" || pathParts[1] != "stacks" || pathParts[3] != "enrich" {
-		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
 		return
 	}
 
 	stackName := pathParts[2]
 	if stackName == "" {
-		http.Error(w, "Stack name is required", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Stack name is required\n")
 		return
 	}
 
 	body, _ := io.ReadAll(r.Body)
 	r.Body.Close()
-	HandleDockerComposeFile(w, body, r.URL.Path, stackName, true, ComposeActionNone)
+	HandleDockerComposeFile(body, r.URL.Path, stackName, true, ComposeActionNone)
 }
 
 // addUndeclaredNetworksAndVolumes analyzes services and adds any undeclared networks and volumes
@@ -1673,25 +1673,25 @@ func replaceEnvVarsInCompose(compose *ComposeFile) error {
 }
 
 // HandleEnrichYAML handles PUT /api/enrich/{stackname} - enriches YAML without saving to prod.env or files
-func HandleEnrichYAML(w http.ResponseWriter, r *http.Request) {
+func HandleEnrichYAML(r *http.Request) {
 	if r.Method != http.MethodPut {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		fmt.Fprintf(os.Stderr, "Method not allowed\n")
 		return
 	}
 
 	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	if len(pathParts) < 4 || pathParts[0] != "api" || pathParts[1] != "stacks" || pathParts[3] != "enrich" {
-		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
 		return
 	}
 
 	stackName := pathParts[2]
 	if stackName == "" {
-		http.Error(w, "Stack name is required", http.StatusBadRequest)
+		fmt.Fprintf(os.Stderr, "Stack name is required\n")
 		return
 	}
 
 	body, _ := io.ReadAll(r.Body)
 	r.Body.Close()
-	HandleDockerComposeFile(w, body, r.URL.Path, stackName, false, ComposeActionNone)
+	HandleDockerComposeFile(body, r.URL.Path, stackName, false, ComposeActionNone)
 }
