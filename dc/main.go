@@ -86,7 +86,7 @@ func main() {
 			if err := os.WriteFile(path, content, 0644); err != nil {
 				die("Failed to write file %s: %v", path, err)
 			}
-			fmt.Printf("Saved stack %s to %s\n", name, path)
+			fmt.Fprintf(os.Stderr, "Saved stack %s to %s\n", name, path)
 		case "rm", "remove", "del", "delete":
 			HandleStackAction(args, die, cmd, false, ComposeActionRemove)
 		case "logs":
