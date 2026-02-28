@@ -5,33 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
-
-// StdoutResponseWriter implements http.ResponseWriter and http.Flusher
-// and writes all output to stdout (headers/status to stderr).
-type StdoutResponseWriter struct {
-	h http.Header
-}
-
-func NewStdoutResponseWriter() *StdoutResponseWriter {
-	return &StdoutResponseWriter{h: make(http.Header)}
-}
-
-func (w *StdoutResponseWriter) Header() http.Header { return w.h }
-func (w *StdoutResponseWriter) WriteHeader(statusCode int) {
-
-}
-func (w *StdoutResponseWriter) Write(b []byte) (int, error) { return os.Stdout.Write(b) }
-func (w *StdoutResponseWriter) Flush()                      { _ = os.Stdout.Sync() }
-
-func (w *StdoutResponseWriter) WriteHeaderString(statusLine string) {
-
-}
 
 func main() {
 	// Buffer all log output so that successful invocations (e.g. "dc stacks ls")
@@ -61,8 +39,6 @@ func main() {
 		die("Usage: dc stack <command> [name]\nCommands: ls, start|up, stop, down, logs")
 	}
 
-	writer := NewStdoutResponseWriter()
-
 	switch args[0] {
 	case "stack", "stacks":
 		if len(args) < 2 {
@@ -75,7 +51,7 @@ func main() {
 				die("Usage: dc stack view <name>")
 			}
 			name := args[2]
-			yamlBody, err := findYAML(name)
+			yamlBody, _, err := findYAML(name)
 			if err != nil {
 				die("%v", err)
 			} else {
@@ -88,29 +64,37 @@ func main() {
 				die("Usage: dc stack %s <name>", cmd)
 			}
 			name := args[2]
-			yamlBody, err := findYAML(name)
+			yamlBody, _, err := findYAML(name)
 			if err != nil {
 				die("%v", err)
 			}
-			HandleStartStack(writer, yamlBody, "/api/stacks/"+name+"/start")
+			HandleStartStack(yamlBody, "/api/stacks/"+name+"/start")
 		case "stop":
 			if len(args) < 3 {
 				die("Usage: dc stack stop <name>")
 			}
 			name := args[2]
-			HandleStopStack(writer, nil, "/api/stacks/"+name+"/stop")
+			yamlBody, _, err := findYAML(name)
+			if err != nil {
+				die("%v", err)
+			}
+			HandleStopStack(yamlBody, "/api/stacks/"+name+"/stop")
 		case "down", "rm", "remove", "del", "delete":
 			if len(args) < 3 {
 				die("Usage: dc stack %s <name>", cmd)
 			}
 			name := args[2]
-			HandleDeleteStack(writer, nil, "/api/stacks/"+name)
+			yamlBody, _, err := findYAML(name)
+			if err != nil {
+				die("%v", err)
+			}
+			HandleDeleteStack(yamlBody, "/api/stacks/"+name)
 		case "logs":
 			if len(args) < 3 {
 				die("Usage: dc stack logs <name>")
 			}
 			name := args[2]
-			HandleStreamStackLogs(writer, nil, "/api/stacks/"+name+"/logs")
+			HandleStreamStackLogs(nil, "/api/stacks/"+name+"/logs")
 		default:
 			die("Unknown stack command: %s", cmd)
 		}
@@ -217,11 +201,11 @@ func findRunningStackConfigFile(name string) string {
 }
 
 // findYAML searches common locations for a stack YAML file. Kept from the previous CLI logic.
-func findYAML(name string) ([]byte, error) {
+func findYAML(name string) ([]byte, string, error) {
 	// Check running Docker stack labels first
 	if configFile := findRunningStackConfigFile(name); configFile != "" {
 		if data, err := os.ReadFile(configFile); err == nil {
-			return data, nil
+			return data, configFile, nil
 		}
 	}
 
@@ -242,14 +226,8 @@ func findYAML(name string) ([]byte, error) {
 	for _, p := range candidates {
 		data, err := os.ReadFile(p)
 		if err == nil {
-			return data, nil
+			return data, p, nil
 		}
 	}
-	return nil, fmt.Errorf("no YAML found for stack %q; tried: %v", name, candidates)
+	return nil, "", fmt.Errorf("no YAML found for stack %q; tried: %v", name, candidates)
 }
-
-// The following old functions (login, run) are intentionally left as no-ops
-// to preserve compatibility with other callers in the repo; they are not used
-// by the new CLI entrypoint but kept to avoid breaking the build.
-func login(host, user, password string) (string, error)        { return "", nil }
-func run(host, token, command, name string, body []byte) error { return nil }

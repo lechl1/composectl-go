@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -143,7 +142,7 @@ func getStacksList() ([]Stack, error) {
 // streamCommandOutput executes a command and streams its stdout and stderr to the HTTP response
 // using chunked transfer encoding. Returns error if command execution fails.
 // Note: Headers should be set by the caller before calling this function if multiple commands are streamed.
-func streamCommandOutput(w http.ResponseWriter, cmd *exec.Cmd) error {
+func streamCommandOutput(cmd *exec.Cmd) error {
 
 	// Get pipes for stdout and stderr
 	stdout, err := cmd.StdoutPipe()
@@ -170,10 +169,7 @@ func streamCommandOutput(w http.ResponseWriter, cmd *exec.Cmd) error {
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			line := scanner.Text()
-			fmt.Fprintf(w, "[STDOUT] %s\n", line)
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
+			fmt.Fprintf(os.Stderr, "[STDOUT] %s\n", line)
 		}
 	}()
 
@@ -183,10 +179,7 @@ func streamCommandOutput(w http.ResponseWriter, cmd *exec.Cmd) error {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
 			line := scanner.Text()
-			fmt.Fprintf(w, "[STDERR] %s\n", line)
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
+			fmt.Fprintf(os.Stderr, "[STDERR] %s\n", line)
 		}
 	}()
 
@@ -195,17 +188,11 @@ func streamCommandOutput(w http.ResponseWriter, cmd *exec.Cmd) error {
 
 	// Wait for command to finish and get exit status
 	if err := cmd.Wait(); err != nil {
-		fmt.Fprintf(w, "[ERROR] Command failed: %v\n", err)
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
-		}
+		fmt.Fprintf(os.Stderr, "[ERROR] Command failed: %v\n", err)
 		return err
 	}
 
-	fmt.Fprintf(w, "[DONE] Command completed successfully\n")
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
+	fmt.Fprintf(os.Stderr, "[DONE] Command completed successfully\n")
 
 	return nil
 }
@@ -667,7 +654,7 @@ func getEffectiveComposeFile(stackName string) string {
 
 // HandleStopStack handles POST /api/stacks/{name}/stop
 // Stops all containers in a Docker Compose stack
-func HandleStopStack(w http.ResponseWriter, body []byte, path string) {
+func HandleStopStack(body []byte, path string) {
 	// Extract stack name from URL path
 	// Expected format: /api/stacks/{name}/stop
 	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
@@ -682,12 +669,12 @@ func HandleStopStack(w http.ResponseWriter, body []byte, path string) {
 		return
 	}
 
-	HandleDockerComposeFile(w, body, path, stackName, false, ComposeActionStop)
+	HandleDockerComposeFile(body, path, stackName, false, ComposeActionStop)
 }
 
 // HandleStartStack handles POST /api/stacks/{name}/start
 // Starts all containers in a Docker Compose stack
-func HandleStartStack(w http.ResponseWriter, body []byte, path string) {
+func HandleStartStack(body []byte, path string) {
 	// Extract stack name from URL path
 	// Expected format: /api/stacks/{name}/start
 	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
@@ -703,7 +690,7 @@ func HandleStartStack(w http.ResponseWriter, body []byte, path string) {
 	}
 
 	log.Printf("Starting stack: %s", stackName)
-	HandleDockerComposeFile(w, body, path, stackName, false, ComposeActionUp)
+	HandleDockerComposeFile(body, path, stackName, false, ComposeActionUp)
 }
 
 // findContainersByProjectName finds all containers that match the given project name label
@@ -877,7 +864,7 @@ func reconstructComposeFromContainers(inspectData []DockerInspect) (string, erro
 // HandleGetStack handles GET /api/stacks/{name}
 // Serves the YAML file for the specified stack from the stacks directory
 // If the file doesn't exist, reconstructs it from running containers
-func HandleGetStack(w http.ResponseWriter, body []byte, path string) {
+func HandleGetStack(body []byte, path string) {
 	// Extract stack name from URL path
 	// Expected format: /api/stacks/{name}
 	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
@@ -944,14 +931,12 @@ func HandleGetStack(w http.ResponseWriter, body []byte, path string) {
 			return
 		}
 	}
-
-	// Serve the file content as text/plain
-	w.Write(content)
+	os.Stdout.Write(content)
 }
 
 // HandlePutStack handles PUT /api/stacks/{name}
 // Updates the YAML file for the specified stack
-func HandlePutStack(w http.ResponseWriter, body []byte, path string) {
+func HandlePutStack(body []byte, path string) {
 	// Extract stack name from URL path
 	// Expected format: /api/stacks/{name}
 	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
@@ -966,10 +951,10 @@ func HandlePutStack(w http.ResponseWriter, body []byte, path string) {
 		return
 	}
 
-	HandleDockerComposeFile(w, body, path, stackName, false, ComposeActionNone)
+	HandleDockerComposeFile(body, path, stackName, false, ComposeActionNone)
 }
 
-func HandleDockerComposeFile(w http.ResponseWriter, body []byte, path string, stackName string, dryRun bool, action ComposeAction) {
+func HandleDockerComposeFile(body []byte, path string, stackName string, dryRun bool, action ComposeAction) {
 	// First, sanitize passwords and extract them to prod.env
 	// This must be done BEFORE enrichment to capture plaintext passwords
 	var modifiedComposeFile ComposeFile
@@ -1000,7 +985,6 @@ func HandleDockerComposeFile(w http.ResponseWriter, body []byte, path string, st
 
 	var cmd *exec.Cmd
 	var actionName string
-	w.WriteHeader(http.StatusOK)
 
 	if dryRun {
 		return
@@ -1010,36 +994,30 @@ func HandleDockerComposeFile(w http.ResponseWriter, body []byte, path string, st
 	case ComposeActionUp:
 		actionName = "up"
 		// Create missing networks and volumes before docker modifiedComposeFile up/down
-		if err := ensureNetworksExist(&modifiedComposeFile, w); err != nil {
+		if err := ensureNetworksExist(&modifiedComposeFile); err != nil {
 			log.Printf("Error ensuring networks exist for stack %s: %v", stackName, err)
-			fmt.Fprintf(w, "[ERROR] Failed to ensure networks exist: %v\n", err)
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
+			fmt.Fprintf(os.Stderr, "[ERROR] Failed to ensure networks exist: %v\n", err)
 		}
-		if err := ensureVolumesExist(&modifiedComposeFile, w); err != nil {
+		if err := ensureVolumesExist(&modifiedComposeFile); err != nil {
 			log.Printf("Error ensuring volumes exist for stack %s: %v", stackName, err)
-			fmt.Fprintf(w, "[ERROR] Failed to ensure volumes exist: %v\n", err)
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
+			fmt.Fprintf(os.Stderr, "[ERROR] Failed to ensure volumes exist: %v\n", err)
 		}
 
-		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(w, modifiedComposeFile); !done {
+		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
 			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "up", "-d", "--wait", "--remove-orphans")
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
 			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
 		}
 	case ComposeActionDown:
 		actionName = "down"
-		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(w, modifiedComposeFile); !done {
+		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
 			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down", "--wait", "--remove-orphans")
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
 			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
 		}
 	case ComposeActionStop:
 		actionName = "stop"
-		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(w, modifiedComposeFile); !done {
+		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
 			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "stop")
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
 			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
@@ -1050,7 +1028,7 @@ func HandleDockerComposeFile(w http.ResponseWriter, body []byte, path string, st
 		log.Printf("Executing docker modifiedComposeFile %s for stack: %s", actionName, stackName)
 
 		// Stream the output (headers already set above)
-		if err := streamCommandOutput(w, cmd); err != nil {
+		if err := streamCommandOutput(cmd); err != nil {
 			log.Printf("Error executing docker modifiedComposeFile %s for stack %s: %v", actionName, stackName, err)
 			// Error already written to response stream
 			return
@@ -1087,14 +1065,11 @@ func HandleDockerComposeFile(w http.ResponseWriter, body []byte, path string, st
 	}
 }
 
-func serializeYamlWithPlainTextSecrets(w http.ResponseWriter, modifiedComposeFile ComposeFile) (strings.Builder, string, bool) {
+func serializeYamlWithPlainTextSecrets(modifiedComposeFile ComposeFile) (strings.Builder, string, bool) {
 	// Replace environment variables in the effective YAML content
 	if err := replaceEnvVarsInCompose(&modifiedComposeFile); err != nil {
 		log.Printf("Error replacing environment variables in modifiedComposeFile file: %v", err)
-		fmt.Fprintf(w, "[ERROR] Failed to process modifiedComposeFile file: %v\n", err)
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
-		}
+		fmt.Fprintf(os.Stderr, "[ERROR] Failed to process modifiedComposeFile file: %v\n", err)
 		return strings.Builder{}, "", true
 	}
 	var modifiedComposeYamlWithPlainTextSecretsBuffer strings.Builder
@@ -1110,7 +1085,7 @@ func serializeYamlWithPlainTextSecrets(w http.ResponseWriter, modifiedComposeFil
 // ensureNetworksExist checks all networks defined in the compose file and creates missing ones
 // Networks are created in bridge mode if no driver is specified and external is false
 // If w is not nil, output is streamed to the HTTP response
-func ensureNetworksExist(compose *ComposeFile, w http.ResponseWriter) error {
+func ensureNetworksExist(compose *ComposeFile) error {
 	if compose.Networks == nil {
 		return nil
 	}
@@ -1119,12 +1094,7 @@ func ensureNetworksExist(compose *ComposeFile, w http.ResponseWriter) error {
 		// Skip external networks as they should already exist
 		if networkConfig.External {
 			log.Printf("Skipping external network: %s", networkName)
-			if w != nil {
-				fmt.Fprintf(w, "[INFO] Skipping external network: %s\n", networkName)
-				if flusher, ok := w.(http.Flusher); ok {
-					flusher.Flush()
-				}
-			}
+			fmt.Fprintf(os.Stderr, "[INFO] Skipping external network: %s\n", networkName)
 			continue
 		}
 
@@ -1132,12 +1102,7 @@ func ensureNetworksExist(compose *ComposeFile, w http.ResponseWriter) error {
 		checkCmd := exec.Command("docker", "network", "inspect", networkName)
 		if err := checkCmd.Run(); err == nil {
 			log.Printf("Network already exists: %s", networkName)
-			if w != nil {
-				fmt.Fprintf(w, "[INFO] Network already exists: %s\n", networkName)
-				if flusher, ok := w.(http.Flusher); ok {
-					flusher.Flush()
-				}
-			}
+			fmt.Fprintf(os.Stderr, "[INFO] Network already exists: %s\n", networkName)
 			continue
 		}
 
@@ -1162,16 +1127,11 @@ func ensureNetworksExist(compose *ComposeFile, w http.ResponseWriter) error {
 		createCmd := exec.Command("docker", createArgs...)
 
 		// Stream output if ResponseWriter is provided
-		if w != nil {
-			log.Printf("Creating network: %s with driver: %s", networkName, driver)
-			fmt.Fprintf(w, "[INFO] Creating network: %s with driver: %s\n", networkName, driver)
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
+		log.Printf("Creating network: %s with driver: %s", networkName, driver)
+		fmt.Fprintf(os.Stderr, "[INFO] Creating network: %s with driver: %s\n", networkName, driver)
 
-			if err := streamCommandOutput(w, createCmd); err != nil {
-				return fmt.Errorf("failed to create network %s: %v", networkName, err)
-			}
+		if err := streamCommandOutput(createCmd); err != nil {
+			return fmt.Errorf("failed to create network %s: %v", networkName, err)
 		} else {
 			// Fall back to non-streaming for backward compatibility
 			output, err := createCmd.CombinedOutput()
@@ -1189,7 +1149,7 @@ func ensureNetworksExist(compose *ComposeFile, w http.ResponseWriter) error {
 // ensureVolumesExist checks all volumes defined in the compose file and creates missing ones
 // Volumes are created with driver "local" if no driver is specified and external is false
 // If w is not nil, output is streamed to the HTTP response
-func ensureVolumesExist(compose *ComposeFile, w http.ResponseWriter) error {
+func ensureVolumesExist(compose *ComposeFile) error {
 	if compose.Volumes == nil {
 		return nil
 	}
@@ -1198,12 +1158,7 @@ func ensureVolumesExist(compose *ComposeFile, w http.ResponseWriter) error {
 		// Skip external volumes as they should already exist
 		if volumeConfig.External {
 			log.Printf("Skipping external volume: %s", volumeName)
-			if w != nil {
-				fmt.Fprintf(w, "[INFO] Skipping external volume: %s\n", volumeName)
-				if flusher, ok := w.(http.Flusher); ok {
-					flusher.Flush()
-				}
-			}
+			fmt.Fprintf(os.Stderr, "[INFO] Skipping external volume: %s\n", volumeName)
 			continue
 		}
 
@@ -1211,12 +1166,7 @@ func ensureVolumesExist(compose *ComposeFile, w http.ResponseWriter) error {
 		checkCmd := exec.Command("docker", "volume", "inspect", volumeName)
 		if err := checkCmd.Run(); err == nil {
 			log.Printf("Volume already exists: %s", volumeName)
-			if w != nil {
-				fmt.Fprintf(w, "[INFO] Volume already exists: %s\n", volumeName)
-				if flusher, ok := w.(http.Flusher); ok {
-					flusher.Flush()
-				}
-			}
+			fmt.Fprintf(os.Stderr, "[INFO] Volume already exists: %s\n", volumeName)
 			continue
 		}
 
@@ -1247,16 +1197,11 @@ func ensureVolumesExist(compose *ComposeFile, w http.ResponseWriter) error {
 		createCmd := exec.Command("docker", createArgs...)
 
 		// Stream output if ResponseWriter is provided
-		if w != nil {
-			log.Printf("Creating volume: %s with driver: %s", targetName, driver)
-			fmt.Fprintf(w, "[INFO] Creating volume: %s with driver: %s\n", targetName, driver)
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
+		log.Printf("Creating volume: %s with driver: %s", targetName, driver)
+		fmt.Fprintf(os.Stderr, "[INFO] Creating volume: %s with driver: %s\n", targetName, driver)
 
-			if err := streamCommandOutput(w, createCmd); err != nil {
-				return fmt.Errorf("failed to create volume %s: %v", targetName, err)
-			}
+		if err := streamCommandOutput(createCmd); err != nil {
+			return fmt.Errorf("failed to create volume %s: %v", targetName, err)
 		} else {
 			// Fall back to non-streaming for backward compatibility
 			output, err := createCmd.CombinedOutput()
@@ -1271,7 +1216,7 @@ func ensureVolumesExist(compose *ComposeFile, w http.ResponseWriter) error {
 	return nil
 }
 
-func HandleStreamStackLogs(w http.ResponseWriter, body []byte, path string) {
+func HandleStreamStackLogs(body []byte, path string) {
 	// Extract stack name from URL path
 	// Expected format: /api/stacks/{name}/logs
 	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
@@ -1292,14 +1237,14 @@ func HandleStreamStackLogs(w http.ResponseWriter, body []byte, path string) {
 	cmd := exec.Command("docker-compose", "-f", GetStackPath(stackName, true), "logs", "-f")
 
 	// Stream logs to the response
-	err := streamCommandOutput(w, cmd)
+	err := streamCommandOutput(cmd)
 	if err != nil {
 		log.Printf("Error streaming logs for stack %s: %v", stackName, err)
 		fmt.Fprintf(os.Stderr, "Failed to stream logs\n")
 	}
 }
 
-func HandleDeleteStack(w http.ResponseWriter, body []byte, path string) {
+func HandleDeleteStack(body []byte, path string) {
 	// Extract stack name from URL path
 	// Expected format: /api/stacks/{name}
 	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
@@ -1314,7 +1259,7 @@ func HandleDeleteStack(w http.ResponseWriter, body []byte, path string) {
 		return
 	}
 
-	HandleDockerComposeFile(w, body, path, stackName, false, ComposeActionDown)
+	HandleDockerComposeFile(body, path, stackName, false, ComposeActionDown)
 }
 
 // getStacksData returns the combined stacks data (same as GET /api/stacks)
