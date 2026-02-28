@@ -86,37 +86,38 @@ async function ftch({ url, log, successMessage, errorMessage, ...options }) {
   return await authFetch(url, options)
       .then(async response => {
         const responseText = [];
-        if (response.ok) {
-          if (log) {
-            const decoder = new TextDecoder();
-            await response.body.pipeTo(new WritableStream({
-              write(chunk) {
-                const text = decoder.decode(chunk, {stream: true});
-                log(text);
-                responseText.push(text);
-              },
-              close() {
-
-              },
-              abort(err) {
-                throw `Stream aborted: ${err}`
-              }
-            }));
-            return responseText.join('');
-          } else {
-            return await response.text();
-          }
-        } else {
-          throw response.statusText;
+        if (!response.ok) {
+          throw await response.text();
         }
+        const decoder = new TextDecoder();
+        await response.body.pipeTo(new WritableStream({
+          write(chunk) {
+            const text = decoder.decode(chunk, {stream: true});
+            log(text);
+            responseText.push(text);
+          },
+          close() {
+
+          },
+          abort(err) {
+            throw `Stream aborted: ${err}`
+          }
+        }));
+        return responseText.join('');
       })
       .then(result => {
-        log(`\n${result.text}`);
-        log(`\n✅ ${successMessage}`);
+        if (successMessage) {
+          log(`\n✅ ${successMessage}`);
+        }
+        return result;
       })
       .catch(responseText => {
-        log(`\n${responseText}`);
-        log(`\n❌ ${errorMessage}`);
+        if (typeof responseText === 'string') {
+          log(`\n${responseText}`);
+        }
+        if (typeof errorMessage === 'string') {
+          log(`\n❌ ${errorMessage}`);
+        }
         throw responseText
       });
 }

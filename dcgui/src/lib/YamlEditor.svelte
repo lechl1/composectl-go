@@ -1,5 +1,5 @@
 <script>
-  import { onMount, tick } from "svelte";
+  import { onMount } from "svelte";
   import { EditorView, basicSetup } from "codemirror";
   import { yaml } from "@codemirror/lang-yaml";
   import { oneDark } from "@codemirror/theme-one-dark";
@@ -88,21 +88,14 @@
     }
   });
 
-  $effect(async () => {
+  $effect(() => {
     if (showOutput && outputLog) {
-      // Scroll to bottom when logs are opened and focus the output editor
-      await tick();
+      // Scroll to bottom when logs are opened
       const docLength = outputLog.state.doc.length;
       outputLog.dispatch({
         selection: { anchor: docLength },
         scrollIntoView: true
       });
-      // Focus the CodeMirror view if available
-      if (typeof outputLog.focus === 'function') {
-        try { outputLog.focus(); } catch (e) { /* ignore focus errors */ }
-      } else if (outputLog.contentDOM && typeof outputLog.contentDOM.focus === 'function') {
-        try { outputLog.contentDOM.focus(); } catch (e) { /* ignore focus errors */ }
-      }
     }
   });
 

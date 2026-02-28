@@ -98,98 +98,91 @@ func detectHTTPPort(service *ComposeService) (string, string, bool) {
 	return "", "", false
 }
 
+// labelsToStringMap normalizes any supported labels type into a flat map[string]string.
+func labelsToStringMap(labels interface{}) map[string]string {
+	m := make(map[string]string)
+	switch v := labels.(type) {
+	case map[string]string:
+		for k, val := range v {
+			m[k] = val
+		}
+	case map[string]interface{}:
+		for k, val := range v {
+			m[k] = fmt.Sprintf("%v", val)
+		}
+	case map[interface{}]interface{}:
+		for k, val := range v {
+			if ks, ok := k.(string); ok {
+				m[ks] = fmt.Sprintf("%v", val)
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				if parts := strings.SplitN(s, "=", 2); len(parts) == 2 {
+					m[parts[0]] = parts[1]
+				}
+			}
+		}
+	case []string:
+		for _, s := range v {
+			if parts := strings.SplitN(s, "=", 2); len(parts) == 2 {
+				m[parts[0]] = parts[1]
+			}
+		}
+	}
+	return m
+}
+
+// stringMapToLabels converts a flat map[string]string back to the same type as orig.
+func stringMapToLabels(m map[string]string, orig interface{}) interface{} {
+	switch orig.(type) {
+	case map[string]string, nil:
+		return m
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(m))
+		for k, v := range m {
+			out[k] = v
+		}
+		return out
+	case map[interface{}]interface{}:
+		out := make(map[interface{}]interface{}, len(m))
+		for k, v := range m {
+			out[k] = v
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, 0, len(m))
+		for k, v := range m {
+			out = append(out, fmt.Sprintf("%s=%s", k, v))
+		}
+		return out
+	case []string:
+		out := make([]string, 0, len(m))
+		for k, v := range m {
+			out = append(out, fmt.Sprintf("%s=%s", k, v))
+		}
+		return out
+	default:
+		fmt.Fprintf(os.Stderr, "unknown labels type %T, skipping Traefik label injection\n", orig)
+		return orig
+	}
+}
+
 // addTraefikLabelsInterface adds a minimal set of Traefik labels into a generic labels map
 func addTraefikLabelsInterface(service *ComposeService, serviceName, port, scheme string) {
 	fmt.Fprintf(os.Stderr, "Adding Traefik labels to service '%s' for port %s and scheme %s...\n", serviceName, port, scheme)
 
-	routerKey := fmt.Sprintf("traefik.http.routers.%s.rule", serviceName)
-	servicePortKey := fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", serviceName)
-	entrypointKey := fmt.Sprintf("traefik.http.routers.%s.entrypoints", serviceName)
 	entrypointVal := "http"
 	if scheme == "https" {
 		entrypointVal = "https"
 	}
 
-	switch v := service.Labels.(type) {
-	case map[string]interface{}:
-		// set as map[string]interface{}
-		v[routerKey] = fmt.Sprintf("Host(`%s`)", serviceName)
-		v[servicePortKey] = port
-		v[entrypointKey] = entrypointVal
-		service.Labels = v
-
-	case map[string]string:
-		v[routerKey] = fmt.Sprintf("Host(`%s`)", serviceName)
-		v[servicePortKey] = port
-		v[entrypointKey] = entrypointVal
-		service.Labels = v
-
-	case map[interface{}]interface{}:
-		// convert to map[string]interface{}
-		out := make(map[string]interface{})
-		for key, val := range v {
-			if ks, ok := key.(string); ok {
-				out[ks] = val
-			}
-		}
-		out[routerKey] = fmt.Sprintf("Host(`%s`)", serviceName)
-		out[servicePortKey] = port
-		out[entrypointKey] = entrypointVal
-		service.Labels = out
-
-	case []interface{}:
-		// filter out existing keys we will set and append key=value strings
-		newArr := make([]interface{}, 0, len(v)+3)
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				if parts := strings.SplitN(s, "=", 2); len(parts) == 2 {
-					k := parts[0]
-					if k == routerKey || k == servicePortKey || k == entrypointKey {
-						continue
-					}
-				}
-				newArr = append(newArr, s)
-			} else {
-				newArr = append(newArr, item)
-			}
-		}
-		newArr = append(newArr, fmt.Sprintf("%s=%s", routerKey, fmt.Sprintf("Host(`%s`)", serviceName)))
-		newArr = append(newArr, fmt.Sprintf("%s=%s", servicePortKey, port))
-		newArr = append(newArr, fmt.Sprintf("%s=%s", entrypointKey, entrypointVal))
-		service.Labels = newArr
-
-	case []string:
-		newArr := make([]string, 0, len(v)+3)
-		for _, s := range v {
-			if parts := strings.SplitN(s, "=", 2); len(parts) == 2 {
-				k := parts[0]
-				if k == routerKey || k == servicePortKey || k == entrypointKey {
-					continue
-				}
-			}
-			newArr = append(newArr, s)
-		}
-		newArr = append(newArr, fmt.Sprintf("%s=%s", routerKey, fmt.Sprintf("Host(`%s`)", serviceName)))
-		newArr = append(newArr, fmt.Sprintf("%s=%s", servicePortKey, port))
-		newArr = append(newArr, fmt.Sprintf("%s=%s", entrypointKey, entrypointVal))
-		service.Labels = newArr
-
-	case nil:
-		m := make(map[string]string)
-		m[routerKey] = fmt.Sprintf("Host(`%s`)", serviceName)
-		m[servicePortKey] = port
-		m[entrypointKey] = entrypointVal
-		service.Labels = m
-
-	default:
-		// Unknown type: try to coerce common map types via fmt conversion
-		// Fallback to map[string]string
-		m := make(map[string]string)
-		m[routerKey] = fmt.Sprintf("Host(`%s`)", serviceName)
-		m[servicePortKey] = port
-		m[entrypointKey] = entrypointVal
-		service.Labels = m
-	}
+	flat := labelsToStringMap(service.Labels)
+	flat[fmt.Sprintf("traefik.http.routers.%s.rule", serviceName)] = fmt.Sprintf("Host(`%s`)", serviceName)
+	flat[fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", serviceName)] = port
+	flat[fmt.Sprintf("traefik.http.routers.%s.entrypoints", serviceName)] = entrypointVal
+	service.Labels = stringMapToLabels(flat, service.Labels)
 }
 
 // getDockerSocketPath returns a sensible docker socket path

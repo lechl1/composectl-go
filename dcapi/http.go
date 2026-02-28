@@ -13,7 +13,6 @@ func RegisterHTTPHandlers() {
 	http.HandleFunc("/ws", JwtAuthMiddleware(HandleWebSocket))
 	http.HandleFunc("/api/thumbnail", JwtAuthMiddleware(HandleThumbnail))
 	http.HandleFunc("/api/stacks", JwtAuthMiddleware(HandleStackAPI))
-	http.HandleFunc("/api/stacks/", JwtAuthMiddleware(HandleStackAPI))
 }
 
 // HandleStackAPI routes stack API requests to appropriate handlers
@@ -22,70 +21,65 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 	path = strings.TrimPrefix(path, "/api")
 
 	if !strings.HasPrefix(path, "/stacks") {
-		http.Error(w, "Not found", http.StatusNotFound)
+		http.Error(w, "Not found "+path, http.StatusNotFound)
 		return
 	}
 
 	path = strings.TrimPrefix(path, "/stacks")
-	// bare GET /api/stacks → list all stacks
-	if path == "" || path == "/" {
-		if r.Method == http.MethodGet {
-			HandleAction(w, "dc", "ls")
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-		return
+	segments := []string{}
+	if strings.Contains(path, "/") {
+		segments = strings.Split(strings.TrimPrefix(path, "/"), "/")
 	}
-	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	stackName := segments[0]
+
 	if len(segments) == 2 {
+		stackName := segments[0]
 		actionName := segments[1]
 		switch actionName {
 		case "stop", "start", "up", "down", "create":
 			if r.Method == http.MethodPost || r.Method == http.MethodPut {
-				HandleAction(w, "dc", actionName, stackName)
+				HandleAction(w, "dc", "stack", actionName, stackName)
 			} else {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
 		case "logs":
 			if r.Method == http.MethodGet {
-				HandleAction(w, "dc", actionName, stackName)
+				HandleAction(w, "dc", "stack", actionName, stackName)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		case "rm", "remove", "del", "delete":
+			if r.Method == http.MethodDelete {
+				HandleAction(w, "dc", "stack", "rm", stackName)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		case "view":
+			if r.Method == http.MethodGet {
+				HandleAction(w, "dc", "stack", "view", stackName)
 			} else {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
 		default:
-			http.Error(w, "Not found", http.StatusNotFound)
+			http.Error(w, "Not found "+path, http.StatusNotFound)
 		}
-	} else {
-		if r.Method == http.MethodDelete {
-			HandleAction(w, "dc", "rm", stackName)
-		} else if r.Method == http.MethodGet {
-			HandleAction(w, "dc", "view", stackName)
+	} else if len(segments) == 0 {
+		if r.Method == http.MethodGet {
+			HandleAction(w, "dc", "stack", "ls")
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
+	} else {
+		http.Error(w, "Not found "+path, http.StatusNotFound)
 	}
-	http.Error(w, "Not found", http.StatusNotFound)
 }
 
-func HandleAction(w http.ResponseWriter, args ...string) {
-	if len(args) < 2 {
-		http.Error(w, "invalid action args", http.StatusInternalServerError)
-		return
-	}
-	binary := args[0]
-	cmdArgs := []string{"stacks", args[1]}
-	for _, a := range args[2:] {
-		if a != "" {
-			cmdArgs = append(cmdArgs, a)
-		}
-	}
-	cmd := exec.Command(binary, cmdArgs...)
+func HandleAction(w http.ResponseWriter, c string, args ...string) {
+	cmd := exec.Command(c, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		http.Error(w, string(out), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "text/plain")
 	_, _ = w.Write(out)
 }
