@@ -695,7 +695,7 @@ func inspectContainers(containerIDs []string) ([]DockerInspect, error) {
 }
 
 // reconstructComposeFromContainers creates a docker-compose YAML from container inspection data
-func reconstructComposeFromContainers(inspectData []DockerInspect) (string, error) {
+func reconstructComposeFromContainers(inspectData []DockerInspect, stackName string) (string, error) {
 	compose := ComposeFile{
 		Services: make(map[string]ComposeService),
 		Volumes:  make(map[string]ComposeVolume),
@@ -705,6 +705,11 @@ func reconstructComposeFromContainers(inspectData []DockerInspect) (string, erro
 	}
 
 	for _, containerData := range inspectData {
+		// Skip containers that don't belong to this stack
+		if project := containerData.Config.Labels["com.docker.compose.project"]; project != stackName {
+			continue
+		}
+
 		// Extract service name from labels
 		labels := containerData.Config.Labels
 		serviceName, ok := labels["com.docker.compose.service"]

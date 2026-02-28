@@ -217,10 +217,70 @@ func findYAML(name string) ([]byte, string, error) {
 	}
 
 	for _, p := range candidates {
+		fi, lstatErr := os.Lstat(p)
+		if lstatErr == nil && fi.Mode()&os.ModeSymlink != 0 {
+			if _, statErr := os.Stat(p); statErr != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "warning: broken symlink: %s — attempting reconstruction from running containers\n", p)
+				data, err := repairBrokenSymlink(p, name)
+				if err != nil {
+					_, _ = fmt.Fprintf(os.Stderr, "warning: could not reconstruct YAML for broken symlink %s: %v\n", p, err)
+					continue
+				}
+				return data, p, nil
+			}
+		}
 		data, err := os.ReadFile(p)
 		if err == nil {
 			return data, p, nil
 		}
 	}
 	return nil, "", fmt.Errorf("no YAML found for stack %q; tried: %v", name, candidates)
+}
+
+// repairBrokenSymlink inspects all Docker containers, reconstructs a compose YAML, writes it
+// over the broken symlink, and returns the file contents.
+func repairBrokenSymlink(symlinkPath string, stackName string) ([]byte, error) {
+	// Collect container IDs (running + stopped) belonging to this compose project
+	out, err := exec.Command("docker", "ps", "-qa",
+		"--filter", "label=com.docker.compose.project="+stackName).Output()
+	if err != nil {
+		return nil, fmt.Errorf("docker ps -qa: %w", err)
+	}
+
+	var ids []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if id := strings.TrimSpace(line); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("no containers found for stack %q", stackName)
+	}
+
+	inspectData, err := inspectContainers(ids)
+	if err != nil {
+		return nil, fmt.Errorf("docker inspect: %w", err)
+	}
+
+	yamlContent, err := reconstructComposeFromContainers(inspectData, stackName)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruction: %w", err)
+	}
+
+	// Prepend a specific notice about the broken symlink
+	header := "# WARNING: This file was auto-reconstructed after a broken symlink was detected.\n" +
+		"# Original symlink path: " + symlinkPath + "\n" +
+		"# Manual verification is required before using this configuration in production.\n"
+	full := header + yamlContent
+
+	// Replace the broken symlink with a regular file containing the reconstructed YAML
+	if err := os.Remove(symlinkPath); err != nil {
+		return nil, fmt.Errorf("remove broken symlink: %w", err)
+	}
+	if err := os.WriteFile(symlinkPath, []byte(full), 0644); err != nil {
+		return nil, fmt.Errorf("write reconstructed YAML to %s: %w", symlinkPath, err)
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "info: reconstructed YAML written to %s — please review before use\n", symlinkPath)
+
+	return []byte(full), nil
 }
