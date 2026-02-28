@@ -41,11 +41,10 @@ func main() {
 
 	switch args[0] {
 	case "stack", "stacks":
-		if len(args) < 3 {
+		if len(args) < 2 {
 			die("Usage: dc stack <command> [name]")
 		}
 		cmd := args[1]
-		stackName := args[2]
 
 		switch cmd {
 		case "view":
@@ -61,36 +60,16 @@ func main() {
 			}
 		case "ls", "list":
 			HandleListStacks()
-		case "start", "up":
-			if len(args) < 3 {
-				die("Usage: dc stack %s <name>", cmd)
-			}
-			name := args[2]
-			yamlBody, _, err := findYAML(name)
-			if err != nil {
-				die("%v", err)
-			}
-			HandleDockerComposeFile(yamlBody, stackName, false, ComposeActionUp)
+		case "start":
+			HandleStackAction(args, die, cmd, false, ComposeActionStart)
+		case "up":
+			HandleStackAction(args, die, cmd, false, ComposeActionUp)
 		case "stop":
-			if len(args) < 3 {
-				die("Usage: dc stack stop <name>")
-			}
-			name := args[2]
-			yamlBody, _, err := findYAML(name)
-			if err != nil {
-				die("%v", err)
-			}
-			HandleDockerComposeFile(yamlBody, stackName, false, ComposeActionStop)
-		case "down", "rm", "remove", "del", "delete":
-			if len(args) < 3 {
-				die("Usage: dc stack %s <name>", cmd)
-			}
-			name := args[2]
-			yamlBody, _, err := findYAML(name)
-			if err != nil {
-				die("%v", err)
-			}
-			HandleDockerComposeFile(yamlBody, "/api/stacks/"+name, false, ComposeActionDown)
+			HandleStackAction(args, die, cmd, false, ComposeActionStop)
+		case "down":
+			HandleStackAction(args, die, cmd, false, ComposeActionDown)
+		case "rm", "remove", "del", "delete":
+			HandleStackAction(args, die, cmd, false, ComposeActionRemove)
 		case "logs":
 			if len(args) < 3 {
 				die("Usage: dc stack logs <name>")
@@ -175,6 +154,18 @@ func main() {
 	default:
 		die("Unknown command: %s", args[0])
 	}
+}
+
+func HandleStackAction(args []string, die func(format string, args ...interface{}), cmd string, dryRun bool, action ComposeAction) {
+	if len(args) < 3 {
+		die("Usage: dc stack %s <name>", cmd)
+	}
+	name := args[2]
+	yamlBody, _, err := findYAML(name)
+	if err != nil {
+		die("%v", err)
+	}
+	HandleDockerComposeFile(yamlBody, name, dryRun, action)
 }
 
 // findRunningStackConfigFile returns the compose config file path for a running stack

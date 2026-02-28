@@ -72,8 +72,10 @@ type LoggingConfig struct {
 type ComposeAction int
 
 const (
-	ComposeActionNone ComposeAction = iota
-	ComposeActionUp   ComposeAction = iota
-	ComposeActionDown ComposeAction = iota
-	ComposeActionStop ComposeAction = iota
+	ComposeActionNone   ComposeAction = iota
+	ComposeActionUp     ComposeAction = iota
+	ComposeActionDown   ComposeAction = iota
+	ComposeActionRemove ComposeAction = iota
+	ComposeActionStart  ComposeAction = iota
+	ComposeActionStop   ComposeAction = iota
 )

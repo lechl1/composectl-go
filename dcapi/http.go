@@ -47,7 +47,7 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 			} else {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
-		case "logs", "view":
+		case "logs":
 			if r.Method == http.MethodGet {
 				HandleAction(w, "dc", actionName, stackName)
 			} else {
@@ -55,6 +55,14 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 			}
 		default:
 			http.Error(w, "Not found", http.StatusNotFound)
+		}
+	} else {
+		if r.Method == http.MethodDelete {
+			HandleAction(w, "dc", "rm", stackName)
+		} else if r.Method == http.MethodGet {
+			HandleAction(w, "dc", "view", stackName)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	}
 	http.Error(w, "Not found", http.StatusNotFound)
