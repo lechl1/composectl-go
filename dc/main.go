@@ -217,19 +217,11 @@ func findYAML(name string) ([]byte, string, error) {
 	}
 
 	for _, p := range candidates {
-		fi, lstatErr := os.Lstat(p)
-		if lstatErr == nil && fi.Mode()&os.ModeSymlink != 0 {
-			if _, statErr := os.Stat(p); statErr != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "warning: broken symlink: %s — attempting reconstruction from running containers\n", p)
-				data, err := repairBrokenSymlink(p, name)
-				if err != nil {
-					_, _ = fmt.Fprintf(os.Stderr, "warning: could not reconstruct YAML for broken symlink %s: %v\n", p, err)
-					continue
-				}
-				return data, p, nil
-			}
-		}
 		data, err := os.ReadFile(p)
+		if err == nil {
+			return data, p, nil
+		}
+		data, err = repairBrokenSymlink(p, name)
 		if err == nil {
 			return data, p, nil
 		}

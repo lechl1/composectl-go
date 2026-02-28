@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -53,14 +54,14 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 			} else {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
-		case "view":
-			if r.Method == http.MethodGet {
-				HandleAction(w, "dc", "stack", "view", stackName)
-			} else {
-				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			}
 		default:
 			http.Error(w, "Not found "+path, http.StatusNotFound)
+		}
+	} else if len(segments) == 1 {
+		if r.Method == http.MethodGet {
+			HandleAction(w, "dc", "stack", "view", segments[0])
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	} else if len(segments) == 0 {
 		if r.Method == http.MethodGet {
@@ -75,6 +76,7 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 
 func HandleAction(w http.ResponseWriter, c string, args ...string) {
 	cmd := exec.Command(c, args...)
+	cmd.Stdin = os.Stdin
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		http.Error(w, string(out), http.StatusInternalServerError)
