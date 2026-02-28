@@ -4,10 +4,8 @@ import (
 	"bufio"
 	"crypto/rand"
 	"fmt"
-	"io"
 	"log"
 	"math/big"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -855,33 +853,6 @@ func enrichWithProxy(service *ComposeService, serviceName string) {
 	}
 }
 
-// HandleEnrichStack handles POST /api/enrich/{name}
-// Enriches the provided docker-compose YAML without modifying files or creating secrets
-func HandleEnrichStack(r *http.Request) {
-	if r.Method != http.MethodPost {
-		fmt.Fprintf(os.Stderr, "Method not allowed\n")
-		return
-	}
-
-	// Extract stack name from URL path
-	// Expected format: /api/stacks/{name}/enrich
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	if len(pathParts) < 4 || pathParts[0] != "api" || pathParts[1] != "stacks" || pathParts[3] != "enrich" {
-		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
-		return
-	}
-
-	stackName := pathParts[2]
-	if stackName == "" {
-		fmt.Fprintf(os.Stderr, "Stack name is required\n")
-		return
-	}
-
-	body, _ := io.ReadAll(r.Body)
-	r.Body.Close()
-	HandleDockerComposeFile(body, r.URL.Path, stackName, true, ComposeActionNone)
-}
-
 // addUndeclaredNetworksAndVolumes analyzes services and adds any undeclared networks and volumes
 func addUndeclaredNetworksAndVolumes(compose *ComposeFile) {
 	// Initialize maps if they don't exist
@@ -1670,28 +1641,4 @@ func replaceEnvVarsInCompose(compose *ComposeFile) error {
 	}
 
 	return nil
-}
-
-// HandleEnrichYAML handles PUT /api/enrich/{stackname} - enriches YAML without saving to prod.env or files
-func HandleEnrichYAML(r *http.Request) {
-	if r.Method != http.MethodPut {
-		fmt.Fprintf(os.Stderr, "Method not allowed\n")
-		return
-	}
-
-	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	if len(pathParts) < 4 || pathParts[0] != "api" || pathParts[1] != "stacks" || pathParts[3] != "enrich" {
-		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
-		return
-	}
-
-	stackName := pathParts[2]
-	if stackName == "" {
-		fmt.Fprintf(os.Stderr, "Stack name is required\n")
-		return
-	}
-
-	body, _ := io.ReadAll(r.Body)
-	r.Body.Close()
-	HandleDockerComposeFile(body, r.URL.Path, stackName, false, ComposeActionNone)
 }

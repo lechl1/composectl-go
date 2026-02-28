@@ -41,10 +41,12 @@ func main() {
 
 	switch args[0] {
 	case "stack", "stacks":
-		if len(args) < 2 {
+		if len(args) < 3 {
 			die("Usage: dc stack <command> [name]")
 		}
 		cmd := args[1]
+		stackName := args[2]
+
 		switch cmd {
 		case "view":
 			if len(args) < 3 {
@@ -68,7 +70,7 @@ func main() {
 			if err != nil {
 				die("%v", err)
 			}
-			HandleStartStack(yamlBody, "/api/stacks/"+name+"/start")
+			HandleDockerComposeFile(yamlBody, stackName, false, ComposeActionUp)
 		case "stop":
 			if len(args) < 3 {
 				die("Usage: dc stack stop <name>")
@@ -78,7 +80,7 @@ func main() {
 			if err != nil {
 				die("%v", err)
 			}
-			HandleStopStack(yamlBody, "/api/stacks/"+name+"/stop")
+			HandleDockerComposeFile(yamlBody, stackName, false, ComposeActionStop)
 		case "down", "rm", "remove", "del", "delete":
 			if len(args) < 3 {
 				die("Usage: dc stack %s <name>", cmd)
@@ -88,7 +90,7 @@ func main() {
 			if err != nil {
 				die("%v", err)
 			}
-			HandleDeleteStack(yamlBody, "/api/stacks/"+name)
+			HandleDockerComposeFile(yamlBody, "/api/stacks/"+name, false, ComposeActionDown)
 		case "logs":
 			if len(args) < 3 {
 				die("Usage: dc stack logs <name>")

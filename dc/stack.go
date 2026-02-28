@@ -652,47 +652,6 @@ func getEffectiveComposeFile(stackName string) string {
 	return regularPath
 }
 
-// HandleStopStack handles POST /api/stacks/{name}/stop
-// Stops all containers in a Docker Compose stack
-func HandleStopStack(body []byte, path string) {
-	// Extract stack name from URL path
-	// Expected format: /api/stacks/{name}/stop
-	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(pathParts) < 3 || pathParts[0] != "api" || pathParts[1] != "stacks" {
-		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
-		return
-	}
-
-	stackName := pathParts[2]
-	if stackName == "" {
-		fmt.Fprintf(os.Stderr, "Stack name is required\n")
-		return
-	}
-
-	HandleDockerComposeFile(body, path, stackName, false, ComposeActionStop)
-}
-
-// HandleStartStack handles POST /api/stacks/{name}/start
-// Starts all containers in a Docker Compose stack
-func HandleStartStack(body []byte, path string) {
-	// Extract stack name from URL path
-	// Expected format: /api/stacks/{name}/start
-	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(pathParts) < 3 || pathParts[0] != "api" || pathParts[1] != "stacks" {
-		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
-		return
-	}
-
-	stackName := pathParts[2]
-	if stackName == "" {
-		fmt.Fprintf(os.Stderr, "Stack name is required\n")
-		return
-	}
-
-	log.Printf("Starting stack: %s", stackName)
-	HandleDockerComposeFile(body, path, stackName, false, ComposeActionUp)
-}
-
 // findContainersByProjectName finds all containers that match the given project name label
 func findContainersByProjectName(projectName string) ([]string, error) {
 	containers, err := getAllContainers()
@@ -861,7 +820,7 @@ func reconstructComposeFromContainers(inspectData []DockerInspect) (string, erro
 	return buf.String(), nil
 }
 
-func HandleDockerComposeFile(body []byte, path string, stackName string, dryRun bool, action ComposeAction) {
+func HandleDockerComposeFile(body []byte, stackName string, dryRun bool, action ComposeAction) {
 	// First, sanitize passwords and extract them to prod.env
 	// This must be done BEFORE enrichment to capture plaintext passwords
 	var modifiedComposeFile ComposeFile
@@ -1149,24 +1108,6 @@ func HandleStreamStackLogs(body []byte, path string) {
 		log.Printf("Error streaming logs for stack %s: %v", stackName, err)
 		fmt.Fprintf(os.Stderr, "Failed to stream logs\n")
 	}
-}
-
-func HandleDeleteStack(body []byte, path string) {
-	// Extract stack name from URL path
-	// Expected format: /api/stacks/{name}
-	pathParts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(pathParts) < 3 || pathParts[0] != "api" || pathParts[1] != "stacks" {
-		fmt.Fprintf(os.Stderr, "Invalid URL format\n")
-		return
-	}
-
-	stackName := pathParts[2]
-	if stackName == "" {
-		fmt.Fprintf(os.Stderr, "Stack name is required\n")
-		return
-	}
-
-	HandleDockerComposeFile(body, path, stackName, false, ComposeActionDown)
 }
 
 // getStacksData returns the combined stacks data (same as GET /api/stacks)
