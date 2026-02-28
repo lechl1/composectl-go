@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -70,6 +71,8 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 	} else if len(segments) == 1 {
 		if r.Method == http.MethodGet {
 			HandleAction(w, "dc", "stack", "view", segments[0])
+		} else if r.Method == http.MethodPut {
+			HandleActionWithStdin(w, r.Body, "dc", "stack", "save", segments[0])
 		} else if r.Method == http.MethodDelete {
 			HandleAction(w, "dc", "stack", "rm", segments[0])
 		} else {
@@ -89,6 +92,18 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 func HandleAction(w http.ResponseWriter, c string, args ...string) {
 	cmd := exec.Command(c, args...)
 	cmd.Stdin = os.Stdin
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		http.Error(w, string(out), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	_, _ = w.Write(out)
+}
+
+func HandleActionWithStdin(w http.ResponseWriter, stdin io.Reader, c string, args ...string) {
+	cmd := exec.Command(c, args...)
+	cmd.Stdin = stdin
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		http.Error(w, string(out), http.StatusInternalServerError)

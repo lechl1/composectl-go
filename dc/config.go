@@ -18,6 +18,57 @@ var (
 	initialized bool
 )
 
+// getAllStackDirs returns all existing stack directories to scan for YAML files.
+// Always includes StacksDir, plus any of the standard locations that exist.
+func getAllStackDirs() []string {
+	homeDir, _ := os.UserHomeDir()
+	candidates := []string{"/stacks", "/containers"}
+	if homeDir != "" {
+		candidates = append(candidates,
+			filepath.Join(homeDir, ".local", "stacks"),
+			filepath.Join(homeDir, ".local", "containers"),
+		)
+	}
+
+	seen := make(map[string]bool)
+	var result []string
+	for _, dir := range candidates {
+		if seen[dir] {
+			continue
+		}
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			seen[dir] = true
+			result = append(result, dir)
+		}
+	}
+	// Always include StacksDir if it's not already covered
+	if StacksDir != "" && !seen[StacksDir] {
+		if info, err := os.Stat(StacksDir); err == nil && info.IsDir() {
+			result = append(result, StacksDir)
+		}
+	}
+	return result
+}
+
+// getFirstWritableStackDir returns the first existing directory for writing new stack files.
+// Priority: /stacks, /containers, $HOME/.local/stacks, $HOME/.local/containers, StacksDir.
+func getFirstWritableStackDir() string {
+	homeDir, _ := os.UserHomeDir()
+	candidates := []string{"/stacks", "/containers"}
+	if homeDir != "" {
+		candidates = append(candidates,
+			filepath.Join(homeDir, ".local", "stacks"),
+			filepath.Join(homeDir, ".local", "containers"),
+		)
+	}
+	for _, dir := range candidates {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+	}
+	return StacksDir
+}
+
 // getDefaultStacksDir returns the default stacks directory with priority:
 // 1. /containers if it exists
 // 2. /stacks if it exists

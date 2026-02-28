@@ -91,20 +91,22 @@ func getStacksList() ([]Stack, error) {
 		return nil, fmt.Errorf("failed to get running stacks: %w", err)
 	}
 
-	// Get available YAML files from stacks directory
+	// Get available YAML files from all stack directories
 	ymlStacks := make(map[string]string) // stackName -> filePath
-
-	entries, err := os.ReadDir(StacksDir)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("failed to read stacks directory: %w", err)
-	}
-
-	if err == nil {
-		// Collect YAML file stack names and paths
+	for _, dir := range getAllStackDirs() {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				log.Printf("Warning: failed to read directory %s: %v", dir, err)
+			}
+			continue
+		}
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".yml") && !strings.HasSuffix(entry.Name(), ".effective.yml") {
 				stackName := strings.TrimSuffix(entry.Name(), ".yml")
-				ymlStacks[stackName] = filepath.Join(StacksDir, entry.Name())
+				if _, exists := ymlStacks[stackName]; !exists {
+					ymlStacks[stackName] = filepath.Join(dir, entry.Name())
+				}
 			}
 		}
 	}

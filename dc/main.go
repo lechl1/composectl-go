@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -68,6 +69,24 @@ func main() {
 			HandleStackAction(args, die, cmd, false, ComposeActionStop)
 		case "down":
 			HandleStackAction(args, die, cmd, false, ComposeActionDown)
+		case "save", "put":
+			if len(args) < 3 {
+				die("Usage: dc stack save <name>")
+			}
+			name := args[2]
+			content, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				die("Failed to read stdin: %v", err)
+			}
+			dir := getFirstWritableStackDir()
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				die("Failed to create directory %s: %v", dir, err)
+			}
+			path := filepath.Join(dir, name+".yml")
+			if err := os.WriteFile(path, content, 0644); err != nil {
+				die("Failed to write file %s: %v", path, err)
+			}
+			fmt.Printf("Saved stack %s to %s\n", name, path)
 		case "rm", "remove", "del", "delete":
 			HandleStackAction(args, die, cmd, false, ComposeActionRemove)
 		case "logs":
