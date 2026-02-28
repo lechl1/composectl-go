@@ -70,6 +70,8 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 	} else if len(segments) == 1 {
 		if r.Method == http.MethodGet {
 			HandleAction(w, "dc", "stack", "view", segments[0])
+		} else if r.Method == http.MethodDelete {
+			HandleAction(w, "dc", "stack", "rm", segments[0])
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}

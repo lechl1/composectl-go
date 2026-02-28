@@ -897,8 +897,6 @@ func HandleDockerComposeFile(body []byte, stackName string, dryRun bool, action 
 		actionName = "rm"
 		if modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(&modifiedComposeFile); !done {
 			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down")
-			os.Stdout.WriteString(modifiedComposeYamlWithPlainTextSecrets)
-
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
 		}
 		if _, path, err := findYAML(stackName); err == nil {
