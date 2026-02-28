@@ -78,11 +78,10 @@
 
 <div class="flex flex-col shrink-0 gap-1 min-w-[18.53%]">
   <!-- Header row -->
-  <div class="flex justify-between items-center mb-1">
-    <span class="text-white/50 text-xs uppercase tracking-wider px-1">Secrets</span>
+  <div class="flex justify-end items-center">
     <button
       onclick={addPending}
-      class="px-4 py-2 text-white/80 border rounded border-green-500/50 bg-green-500/20 hover:bg-green-500/30 transition-colors text-sm"
+      class="p-2 text-white/80 border rounded border-green-500/50 bg-green-500/20 hover:bg-green-500/30 transition-colors text-sm cursor-pointer"
     >
       ➕ Add
     </button>
@@ -102,13 +101,13 @@
       />
       {#if row.entry.trim()}
         <button
-          class="shrink-0 text-base text-gray-600 hover:text-green-400 bg-white hover:bg-white rounded-r px-2"
+          class="shrink-0 text-base text-gray-600 hover:text-green-400 bg-white hover:bg-white rounded-r px-2 cursor-pointer"
           onclick={() => savePending(row.id)}
           title="Save secret"
         >💾</button>
       {:else}
         <button
-          class="shrink-0 text-base text-gray-600 hover:text-red-400 bg-white hover:bg-white rounded-r px-2"
+          class="shrink-0 text-base text-gray-600 hover:text-red-400 bg-white hover:bg-white rounded-r px-2 cursor-pointer"
           onclick={() => removePending(row.id)}
           title="Discard"
         >🗑️</button>
@@ -124,7 +123,7 @@
         <span class="text-gray-500 text-xs font-mono truncate">{secret.value}</span>
       </div>
       <button
-        class="shrink-0 text-base text-gray-600 hover:text-red-400 bg-white/10 hover:bg-white rounded-r px-3"
+        class="shrink-0 text-base text-gray-600 hover:text-red-400 bg-white/10 hover:bg-white/80 cursor-pointer rounded-r px-3"
         onclick={() => handleDelete(secret.name)}
         title="Delete secret"
       >🗑️</button>

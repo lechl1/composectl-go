@@ -12,6 +12,7 @@
   } from "$lib/stackManager.js";
   import {fetchStackDoc} from "./stackManager.js";
   import { logout } from "$lib/auth.js";
+  import { toggleSecrets, secretsState } from "$lib/secretsStore.svelte.js";
   function handleLogout() {
       logout();
   }
@@ -201,10 +202,11 @@
             <button class="cursor-pointer p-2 border rounded border-white/30 text-white/80 text-sm" onclick={stopStack}>🛑 Stop</button>
             <button class="cursor-pointer p-2 border rounded border-white/30 text-white/80 text-sm" onclick={deleteStack}>🗑️ Trash</button>
             <button class="cursor-pointer p-2 border rounded text-white/80 text-sm {showEditor ? 'border-blue-500 bg-blue-500/20' : 'border-white/30'}" onclick={toggleEditor}>✏️ Edit</button>
-            <button class="cursor-pointeffr p-2 border rounded text-white/80 text-sm {showOutput ? 'border-blue-500 bg-blue-500/20' : 'border-white/30'}" onclick={toggleLogs}>📋 Logs</button>
+            <button class="cursor-pointer p-2 border rounded text-white/80 text-sm {showOutput ? 'border-blue-500 bg-blue-500/20' : 'border-white/30'}" onclick={toggleLogs}>📋 Logs</button>
+            <button onclick={toggleSecrets} class="cursor-pointer p-2 border rounded text-white/80 text-sm {secretsState.visible ? 'border-yellow-500 bg-yellow-500/20' : 'border-white/30'}">🔐 Secrets</button>
         </div>
         <div class="flex gap-1">
-            <button onclick={handleLogout} class="text-white/80 rounded border-1 border-red-500/50 p-2 cursor-pointer bg-red-500/20 hover:bg-red-500/30 transition-colors">
+            <button onclick={handleLogout} class="text-white/80 text-sm rounded border-1 border-red-500/50 p-2 cursor-pointer bg-red-500/20 hover:bg-red-500/30 transition-colors">
                 🚪 Logout
             </button>
         </div>
