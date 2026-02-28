@@ -705,18 +705,6 @@ func reconstructComposeFromContainers(inspectData []DockerInspect, stackName str
 	}
 
 	for _, containerData := range inspectData {
-		// If the container doesn't have compose labels, skip it
-		if containerData.Config.Labels == nil || len(containerData.Config.Labels) == 0 {
-			fmt.Println(os.Stderr, "Warning: skipping container without labels "+containerData.Name)
-			continue
-		} else {
-			// Print labels for debugging
-			fmt.Fprintf(os.Stderr, "Container %s labels:\n", containerData.Name)
-			for k, v := range containerData.Config.Labels {
-				fmt.Fprintf(os.Stderr, "  %s=%s\n", k, v)
-			}
-		}
-
 		// Skip containers that don't belong to this stack
 		if project := containerData.Config.Labels["com.docker.compose.project"]; project != stackName {
 			continue
@@ -735,10 +723,11 @@ func reconstructComposeFromContainers(inspectData []DockerInspect, stackName str
 		// Labels (filter out compose-internal metadata labels; preserve all user-defined labels including traefik)
 		serviceLabels := make(map[string]interface{})
 		for key, value := range labels {
-			if !strings.HasPrefix(key, "com.docker.compose.") ||
-				!strings.HasPrefix(key, "org.opencontainers.image") {
-				serviceLabels[key] = value
+			if strings.HasPrefix(key, "com.docker.compose.") ||
+				strings.HasPrefix(key, "org.opencontainers.image") {
+				continue
 			}
+			serviceLabels[key] = value
 		}
 		service := ComposeService{}
 		service.Labels = serviceLabels
