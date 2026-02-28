@@ -891,10 +891,20 @@ func HandleDockerComposeFile(body []byte, stackName string, dryRun bool, action 
 	case ComposeActionRemove:
 		actionName = "rm"
 		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
-			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, actionName, "-f")
+			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down", "--wait")
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
 			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
 		}
+		if _, path, err := findYAML(stackName); err == nil {
+			// Remove the YAML file after stack is removed
+			if err := os.Remove(path); err != nil {
+				log.Printf("Error removing YAML file for stack %s: %v", stackName, err)
+				fmt.Fprintf(os.Stderr, "Failed to remove YAML file for stack %s: %v\n", stackName, err)
+			} else {
+				log.Printf("Successfully removed YAML file for stack %s", stackName)
+			}
+		}
+
 	case ComposeActionStart:
 		actionName = "start"
 		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {

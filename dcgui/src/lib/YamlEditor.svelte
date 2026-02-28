@@ -178,7 +178,8 @@
       appendOutput("", true)
       showOutput = true
       outputStatus = null
-      const result = await deleteStackHandler(selectedStack, appendOutput)
+      const docContent = editorView.state.doc.toString();
+      const result = await deleteStackHandler(selectedStack, docContent, appendOutput)
       outputStatus = result?.success ? 'success' : 'error';
     }
   }
