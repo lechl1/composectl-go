@@ -80,7 +80,7 @@ func main() {
 			die("Unknown stack command: %s", cmd)
 		}
 
-	case "pw", "secret":
+	case "pw", "secret", "secrets":
 		// Forward pw/secret commands to an external `pw` script which reads/writes the env store.
 		if len(args) < 2 {
 			die("Usage: dc %s <args...>", args[0])
@@ -101,6 +101,8 @@ func main() {
 				cmdArgs[0] = "ups"
 			case "select":
 				cmdArgs[0] = "get"
+			case "list":
+				cmdArgs[0] = "ls"
 			}
 		}
 		// Determine helper executable via configuration key `secrets_manager` (falls back to "pw").

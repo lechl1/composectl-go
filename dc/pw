@@ -10,13 +10,14 @@ set -euo pipefail
 # will avoid overwriting it.
 
 # Simple password store backed by a single env-style file.
-# Supported verbs: gen, ins, del, upd, ups, get
+# Supported verbs: gen, ins, del, upd, ups, get, ls
 # Usage: pw gen <KEY>      -> generate password, store and print it
 #        pw ins <KEY>      -> read password from stdin and store (fail if exists)
 #        pw upd <KEY>      -> read password from stdin and update (fail if missing)
 #        pw ups <KEY>      -> read password from stdin and upsert (create or update)
 #        pw get <KEY>      -> print the password for KEY
 #        pw del <KEY>      -> delete KEY
+#        pw ls             -> list all keys and (masked) values
 
 PW_HOME_DIR="${HOME:-$HOME}"
 PW_ENV="${PW_ENV:-"prod"}"
@@ -28,7 +29,11 @@ usage() {
   exit 2
 }
 
-if [ $# -lt 2 ]; then
+if [ $# -lt 1 ]; then
+  usage
+fi
+# ls/list only needs 1 argument
+if [ $# -lt 2 ] && [ "$1" != "ls" ] && [ "$1" != "list" ]; then
   usage
 fi
 
@@ -212,6 +217,31 @@ case "$cmd" in
       echo "key not found" >&2
       exit 1
     fi
+    ;;
+
+  ls|list)
+    if [ ! -f "$PW_FILE" ]; then
+      exit 0
+    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+      # skip blank lines and comments
+      case "$line" in
+        ''|'#'*) continue ;;
+      esac
+      k="${line%%=*}"
+      v="${line#*=}"
+      # mask value if key contains a sensitive word (case-insensitive)
+      k_upper=$(printf "%s" "$k" | tr '[:lower:]' '[:upper:]')
+      case "$k_upper" in
+        *TOKEN*|*SECRET*|*KEY*|*PW*|*PASS*|*PASSWD*)
+          masked=$(printf "%s" "$v" | sed 's/./*/g')
+          printf "%s=%s\n" "$k" "$masked"
+          ;;
+        *)
+          printf "%s=%s\n" "$k" "$v"
+          ;;
+      esac
+    done < "$PW_FILE"
     ;;
 
   *)

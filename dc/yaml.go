@@ -97,7 +97,7 @@ func sortMappingNode(node *yaml.Node) {
 
 // encodeYAMLWithMultiline encodes a value to YAML with multiline strings properly formatted
 // and preserves the order of map entries
-func encodeYAMLWithMultiline(buf *strings.Builder, value interface{}) error {
+func encodeYAMLWithMultiline(buf *strings.Builder, value *ComposeFile) error {
 	// First, marshal to a YAML node
 	var node yaml.Node
 	if err := node.Encode(value); err != nil {

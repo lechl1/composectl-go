@@ -27,9 +27,12 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path = strings.TrimPrefix(path, "/stacks")
+	path = strings.TrimPrefix(path, "/")
 	segments := []string{}
 	if strings.Contains(path, "/") {
-		segments = strings.Split(strings.TrimPrefix(path, "/"), "/")
+		segments = strings.Split(path, "/")
+	} else if path != "" {
+		segments = []string{path}
 	}
 
 	if len(segments) == 2 {
@@ -51,6 +54,12 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 		case "rm", "remove", "del", "delete":
 			if r.Method == http.MethodDelete {
 				HandleAction(w, "dc", "stack", "rm", stackName)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		case "view":
+			if r.Method == http.MethodGet {
+				HandleAction(w, "dc", "stack", "view", segments[0])
 			} else {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}

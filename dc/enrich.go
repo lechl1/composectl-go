@@ -203,40 +203,69 @@ func getCurrentGroupID() string {
 	return fmt.Sprintf("%d", os.Getegid())
 }
 
-// replacePlaceholders replaces placeholders like ${DOCKER_SOCK}, ${USER_ID}, ${USER_GID}
+var placeholderRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+
+// expandStr replaces all ${VAR} and $VAR placeholders in s using the provided vars map.
+// Unresolved placeholders are left unchanged.
+func expandStr(s string, vars map[string]string) string {
+	return placeholderRe.ReplaceAllStringFunc(s, func(match string) string {
+		var name string
+		if strings.HasPrefix(match, "${") {
+			name = match[2 : len(match)-1]
+		} else {
+			name = match[1:]
+		}
+		if v, ok := vars[name]; ok {
+			return v
+		}
+		return match
+	})
+}
+
+// replacePlaceholders replaces all ${VAR} and $VAR placeholders in the compose file.
+// Values are resolved from (lowest to highest priority): prod.env / /run/secrets, then OS environment variables.
 func replacePlaceholders(compose *ComposeFile) {
-	dockerSocket := getDockerSocketPath()
-	userID := getCurrentUserID()
-	groupID := getCurrentGroupID()
+	vars := make(map[string]string)
+
+	// Seed implicit defaults (lowest priority)
+	vars["DOCKER_SOCK"] = getDockerSocketPath()
+	vars["DOCKER_SOCKET"] = getDockerSocketPath()
+	vars["USER_ID"] = getCurrentUserID()
+	vars["USER_GID"] = getCurrentGroupID()
+
+	// Load prod.env and /run/secrets (lower priority)
+	if ProdEnvPath != "" {
+		if envVars, err := readProdEnv(ProdEnvPath); err == nil {
+			for k, v := range envVars {
+				vars[k] = v
+			}
+		}
+	}
+
+	// OS environment variables override (higher priority)
+	for _, e := range os.Environ() {
+		k, v, _ := strings.Cut(e, "=")
+		vars[k] = v
+	}
 
 	for name, service := range compose.Services {
-		// Volumes
 		for i, vol := range service.Volumes {
-			vol = strings.ReplaceAll(vol, "${DOCKER_SOCK}", dockerSocket)
-			vol = strings.ReplaceAll(vol, "${DOCKER_SOCKET}", dockerSocket)
-			vol = strings.ReplaceAll(vol, "$DOCKER_SOCK", dockerSocket)
-			vol = strings.ReplaceAll(vol, "$DOCKER_SOCKET", dockerSocket)
-			vol = strings.ReplaceAll(vol, "${USER_ID}", userID)
-			vol = strings.ReplaceAll(vol, "$USER_ID", userID)
-			vol = strings.ReplaceAll(vol, "${USER_GID}", groupID)
-			vol = strings.ReplaceAll(vol, "$USER_GID", groupID)
-			service.Volumes[i] = vol
+			service.Volumes[i] = expandStr(vol, vars)
 		}
 
-		// Environment map/array
 		if service.Environment != nil {
 			switch v := service.Environment.(type) {
 			case map[string]interface{}:
 				for k, val := range v {
 					if s, ok := val.(string); ok {
-						v[k] = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(s, "${DOCKER_SOCK}", dockerSocket), "${USER_ID}", userID), "${USER_GID}", groupID)
+						v[k] = expandStr(s, vars)
 					}
 				}
 				service.Environment = v
 			case []interface{}:
 				for i, item := range v {
 					if s, ok := item.(string); ok {
-						v[i] = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(s, "${DOCKER_SOCK}", dockerSocket), "${USER_ID}", userID), "${USER_GID}", groupID)
+						v[i] = expandStr(s, vars)
 					}
 				}
 				service.Environment = v
@@ -411,9 +440,6 @@ func enrichAndSanitizeCompose(compose *ComposeFile) {
 
 	// Process secrets with or without side effects based on dryRun
 	processSecrets(compose)
-
-	// Replace placeholders (DOCKER_SOCK, DOCKER_SOCKET, etc.)
-	replacePlaceholders(compose)
 
 	// Ensure container_name is set for services that lack it
 	ensureContainerNames(compose)
@@ -1591,14 +1617,26 @@ func replaceEnvVarsInCompose(compose *ComposeFile) error {
 		}
 	}
 
-	// Volumes
-	for name, vol := range compose.Volumes {
-		vol.Name = replaceInString(vol.Name)
-		vol.Driver = replaceInString(vol.Driver)
-		for k, v := range vol.DriverOpts {
-			vol.DriverOpts[k] = replaceInString(v)
+	// Volumes - update keys and values
+	if compose.Volumes != nil {
+		newVolumes := make(map[string]ComposeVolume, len(compose.Volumes))
+		for name, vol := range compose.Volumes {
+			newName := replaceInString(name)
+			vol.Name = replaceInString(vol.Name)
+			vol.Driver = replaceInString(vol.Driver)
+			if vol.DriverOpts != nil {
+				newDriverOpts := make(map[string]string, len(vol.DriverOpts))
+				for k, v := range vol.DriverOpts {
+					newDriverOpts[replaceInString(k)] = replaceInString(v)
+				}
+				vol.DriverOpts = newDriverOpts
+			}
+			if _, exists := newVolumes[newName]; exists {
+				fmt.Fprintf(os.Stderr, "Warning: volume key '%s' normalized to duplicate name '%s' - overwriting previous entry\n", name, newName)
+			}
+			newVolumes[newName] = vol
 		}
-		compose.Volumes[name] = vol
+		compose.Volumes = newVolumes
 	}
 
 	// Networks
@@ -1610,19 +1648,35 @@ func replaceEnvVarsInCompose(compose *ComposeFile) error {
 		compose.Networks[name] = net
 	}
 
-	// Configs
-	for name, cfg := range compose.Configs {
-		cfg.Content = replaceInString(cfg.Content)
-		cfg.File = replaceInString(cfg.File)
-		compose.Configs[name] = cfg
+	// Configs - update keys and values
+	if compose.Configs != nil {
+		newConfigs := make(map[string]ComposeConfig, len(compose.Configs))
+		for name, cfg := range compose.Configs {
+			newName := replaceInString(name)
+			cfg.Content = replaceInString(cfg.Content)
+			cfg.File = replaceInString(cfg.File)
+			if _, exists := newConfigs[newName]; exists {
+				fmt.Fprintf(os.Stderr, "Warning: config key '%s' normalized to duplicate name '%s' - overwriting previous entry\n", name, newName)
+			}
+			newConfigs[newName] = cfg
+		}
+		compose.Configs = newConfigs
 	}
 
-	// Secrets
-	for name, s := range compose.Secrets {
-		s.Name = replaceInString(s.Name)
-		s.Environment = replaceInString(s.Environment)
-		s.File = replaceInString(s.File)
-		compose.Secrets[name] = s
+	// Secrets - update keys and values
+	if compose.Secrets != nil {
+		newSecrets := make(map[string]ComposeSecret, len(compose.Secrets))
+		for name, s := range compose.Secrets {
+			newName := replaceInString(name)
+			s.Name = replaceInString(s.Name)
+			s.Environment = replaceInString(s.Environment)
+			s.File = replaceInString(s.File)
+			if _, exists := newSecrets[newName]; exists {
+				fmt.Fprintf(os.Stderr, "Warning: secret key '%s' normalized to duplicate name '%s' - overwriting previous entry\n", name, newName)
+			}
+			newSecrets[newName] = s
+		}
+		compose.Secrets = newSecrets
 	}
 
 	if len(undefinedVars) > 0 {

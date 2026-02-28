@@ -830,7 +830,7 @@ func reconstructComposeFromContainers(inspectData []DockerInspect, stackName str
 	buf.WriteString("# Some settings may be incomplete or differ from the original configuration.\n")
 	buf.WriteString("# Please review and adjust as needed before using in production.\n")
 
-	if err := encodeYAMLWithMultiline(&buf, compose); err != nil {
+	if err := encodeYAMLWithMultiline(&buf, &compose); err != nil {
 		return "", err
 	}
 
@@ -850,7 +850,7 @@ func HandleDockerComposeFile(body []byte, stackName string, dryRun bool, action 
 
 	// Marshal the sanitized original version back to YAML for .yml file
 	var originalComposeYamlBuffer strings.Builder
-	if err := encodeYAMLWithMultiline(&originalComposeYamlBuffer, modifiedComposeFile); err != nil {
+	if err := encodeYAMLWithMultiline(&originalComposeYamlBuffer, &modifiedComposeFile); err != nil {
 		log.Printf("Failed to serialize original YAML: %v", err)
 		fmt.Fprintf(os.Stderr, "Failed to serialize original YAML: %v\n", err)
 		return
@@ -860,7 +860,7 @@ func HandleDockerComposeFile(body []byte, stackName string, dryRun bool, action 
 
 	// Marshal the sanitized original version back to YAML for .yml file
 	var modifiedComposeYamlBuffer strings.Builder
-	if err := encodeYAMLWithMultiline(&modifiedComposeYamlBuffer, modifiedComposeFile); err != nil {
+	if err := encodeYAMLWithMultiline(&modifiedComposeYamlBuffer, &modifiedComposeFile); err != nil {
 		log.Printf("Failed to serialize modified YAML: %v", err)
 		fmt.Fprintf(os.Stderr, "Failed to serialize modified YAML: %v\n", err)
 		return
@@ -886,31 +886,31 @@ func HandleDockerComposeFile(body []byte, stackName string, dryRun bool, action 
 			fmt.Fprintf(os.Stderr, "[ERROR] Failed to ensure volumes exist: %v\n", err)
 		}
 
-		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
+		if modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(&modifiedComposeFile); !done {
 			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "up", "-d", "--wait", "--remove-orphans")
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
-			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
 		}
 	case ComposeActionDown:
 		actionName = "down"
-		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
-			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, actionName, "--wait", "--remove-orphans")
+		if modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(&modifiedComposeFile); !done {
+			os.Stdout.WriteString(modifiedComposeYamlWithPlainTextSecrets)
+
+			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, actionName)
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
-			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
 		}
 	case ComposeActionStop:
 		actionName = "stop"
-		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
+		if modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(&modifiedComposeFile); !done {
 			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, actionName)
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
-			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
 		}
 	case ComposeActionRemove:
 		actionName = "rm"
-		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
-			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down", "--wait")
+		if modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(&modifiedComposeFile); !done {
+			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, "down")
+			os.Stdout.WriteString(modifiedComposeYamlWithPlainTextSecrets)
+
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
-			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
 		}
 		if _, path, err := findYAML(stackName); err == nil {
 			// Remove the YAML file after stack is removed
@@ -924,17 +924,15 @@ func HandleDockerComposeFile(body []byte, stackName string, dryRun bool, action 
 
 	case ComposeActionStart:
 		actionName = "start"
-		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
+		if modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(&modifiedComposeFile); !done {
 			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, actionName)
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
-			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
 		}
 	case ComposeActionCreate:
 		actionName = "create"
-		if modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(modifiedComposeFile); !done {
+		if modifiedComposeYamlWithPlainTextSecrets, done := serializeYamlWithPlainTextSecrets(&modifiedComposeFile); !done {
 			cmd = exec.Command("docker", "compose", "-f", "-", "-p", stackName, actionName)
 			cmd.Stdin = strings.NewReader(modifiedComposeYamlWithPlainTextSecrets)
-			modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
 		}
 	}
 
@@ -979,21 +977,22 @@ func HandleDockerComposeFile(body []byte, stackName string, dryRun bool, action 
 	}
 }
 
-func serializeYamlWithPlainTextSecrets(modifiedComposeFile ComposeFile) (strings.Builder, string, bool) {
+func serializeYamlWithPlainTextSecrets(modifiedComposeFile *ComposeFile) (string, bool) {
 	// Replace environment variables in the effective YAML content
-	if err := replaceEnvVarsInCompose(&modifiedComposeFile); err != nil {
+	if err := replaceEnvVarsInCompose(modifiedComposeFile); err != nil {
 		log.Printf("Error replacing environment variables in modifiedComposeFile file: %v", err)
 		fmt.Fprintf(os.Stderr, "[ERROR] Failed to process modifiedComposeFile file: %v\n", err)
-		return strings.Builder{}, "", true
+		return "", true
 	}
 	var modifiedComposeYamlWithPlainTextSecretsBuffer strings.Builder
 	if err := encodeYAMLWithMultiline(&modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeFile); err != nil {
 		log.Printf("Failed to serialize modified YAML with secrets: %v", err)
 		fmt.Fprintf(os.Stderr, "Failed to serialize modified YAML with secrets: %v\n", err)
-		return strings.Builder{}, "", true
+		return "", true
 	}
 	var modifiedComposeYamlWithPlainTextSecrets = modifiedComposeYamlWithPlainTextSecretsBuffer.String()
-	return modifiedComposeYamlWithPlainTextSecretsBuffer, modifiedComposeYamlWithPlainTextSecrets, false
+	modifiedComposeYamlWithPlainTextSecretsBuffer.Reset()
+	return modifiedComposeYamlWithPlainTextSecrets, false
 }
 
 // ensureNetworksExist checks all networks defined in the compose file and creates missing ones
