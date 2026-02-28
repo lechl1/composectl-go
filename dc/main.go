@@ -267,9 +267,11 @@ func repairBrokenSymlink(symlinkPath string, stackName string) ([]byte, error) {
 		"# Manual verification is required before using this configuration in production.\n"
 	full := header + yamlContent
 
-	// Replace the broken symlink with a regular file containing the reconstructed YAML
-	if err := os.Remove(symlinkPath); err != nil {
-		return nil, fmt.Errorf("remove broken symlink: %w", err)
+	// Replace the broken symlink (or create a new file) with the reconstructed YAML.
+	// Ignore remove errors — the path may not exist yet.
+	_ = os.Remove(symlinkPath)
+	if err := os.MkdirAll(filepath.Dir(symlinkPath), 0755); err != nil {
+		return nil, fmt.Errorf("mkdir for %s: %w", symlinkPath, err)
 	}
 	if err := os.WriteFile(symlinkPath, []byte(full), 0644); err != nil {
 		return nil, fmt.Errorf("write reconstructed YAML to %s: %w", symlinkPath, err)

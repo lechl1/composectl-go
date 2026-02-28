@@ -14,6 +14,7 @@ func RegisterHTTPHandlers() {
 	http.HandleFunc("/ws", JwtAuthMiddleware(HandleWebSocket))
 	http.HandleFunc("/api/thumbnail", JwtAuthMiddleware(HandleThumbnail))
 	http.HandleFunc("/api/stacks", JwtAuthMiddleware(HandleStackAPI))
+	http.HandleFunc("/api/stacks/", JwtAuthMiddleware(HandleStackAPI))
 }
 
 // HandleStackAPI routes stack API requests to appropriate handlers
