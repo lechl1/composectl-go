@@ -83,9 +83,6 @@ export function logout() {
 /**
  * Check if user is authenticated
  */
-export function isAuthenticated() {
-  if (browser) {
-    return !!localStorage.getItem("authToken");
-  }
-  return false;
+export async function isAuthenticated() {
+  return await checkAuth();
 }

@@ -72,9 +72,19 @@ func main() {
 		}
 		cmd := args[1]
 		switch cmd {
+		case "view":
+			if len(args) < 3 {
+				die("Usage: dc stack view <name>")
+			}
+			name := args[2]
+			yamlBody, err := findYAML(name)
+			if err != nil {
+				die("%v", err)
+			} else {
+				os.Stdout.Write(yamlBody)
+			}
 		case "ls", "list":
-			r := &http.Request{Method: http.MethodGet, URL: &url.URL{Path: "/api/stacks"}}
-			HandleListStacks(writer, r)
+			HandleListStacks()
 		case "start", "up":
 			if len(args) < 3 {
 				die("Usage: dc stack %s <name>", cmd)
@@ -191,17 +201,51 @@ func main() {
 	}
 }
 
+// findRunningStackConfigFile returns the compose config file path for a running stack
+// by reading the com.docker.compose.project.config_files Docker label.
+func findRunningStackConfigFile(name string) string {
+	cmd := exec.Command("docker", "ps", "-a", "--no-trunc",
+		"--filter", "label=com.docker.compose.project="+name,
+		"--format", "{{.Labels}}")
+	out, err := cmd.Output()
+	if err != nil || len(out) == 0 {
+		return ""
+	}
+	// Labels are comma-separated key=value pairs; take first non-empty line
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		for _, pair := range strings.Split(line, ",") {
+			if kv := strings.SplitN(strings.TrimSpace(pair), "=", 2); len(kv) == 2 {
+				if kv[0] == "com.docker.compose.project.config_files" {
+					// config_files may be comma-separated; return the first one
+					files := strings.SplitN(kv[1], ",", 2)
+					os.Stdout.Write([]byte(kv[1]))
+					return strings.TrimSpace(files[0])
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // findYAML searches common locations for a stack YAML file. Kept from the previous CLI logic.
 func findYAML(name string) ([]byte, error) {
+	// Check running Docker stack labels first
+	if configFile := findRunningStackConfigFile(name); configFile != "" {
+		if data, err := os.ReadFile(configFile); err == nil {
+			return data, nil
+		}
+	}
+
 	home, _ := os.UserHomeDir()
 	u := os.Getenv("USER")
 
 	candidates := []string{
+		filepath.Join(StacksDir, name+".yml"),
 		fmt.Sprintf("./%s.yml", name),
-		filepath.Join(home, "/stacks", name+".yml"),
+		filepath.Join("/stacks", name+".yml"),
 		filepath.Join(home, ".local/stacks", name+".yml"),
 		filepath.Join(home, ".dotfiles/users", u, ".local/stacks", name+".yml"),
-		filepath.Join(home, "/containers", name+".yml"),
+		filepath.Join("/containers", name+".yml"),
 		filepath.Join(home, ".local/containers", name+".yml"),
 		filepath.Join(home, ".dotfiles/users", u, ".local/containers", name+".yml"),
 	}

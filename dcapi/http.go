@@ -30,14 +30,14 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 	// bare GET /api/stacks → list all stacks
 	if path == "" || path == "/" {
 		if r.Method == http.MethodGet {
-			HandleAction(w, r, "dc", "ls")
+			HandleAction(w, "dc", "ls")
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 		return
 	}
 	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(segments) < 2 {
+	if len(segments) < 1 {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
@@ -46,13 +46,13 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 	switch actionName {
 	case "stop", "start", "up", "down", "create", "view":
 		if r.Method == http.MethodPost || r.Method == http.MethodPut {
-			HandleAction(w, r, "dc", actionName, stackName)
+			HandleAction(w, "dc", actionName, stackName)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	case "logs", "list", "ls":
 		if r.Method == http.MethodGet {
-			HandleAction(w, r, "dc", actionName, stackName)
+			HandleAction(w, "dc", actionName, stackName)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -61,7 +61,7 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func HandleAction(w http.ResponseWriter, r *http.Request, args ...string) {
+func HandleAction(w http.ResponseWriter, args ...string) {
 	if len(args) < 2 {
 		http.Error(w, "invalid action args", http.StatusInternalServerError)
 		return
@@ -80,5 +80,5 @@ func HandleAction(w http.ResponseWriter, r *http.Request, args ...string) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(out)
+	_, _ = w.Write(out)
 }

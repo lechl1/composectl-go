@@ -94,10 +94,9 @@ func getStacksList() ([]Stack, error) {
 	}
 
 	// Get available YAML files from stacks directory
-	stacksDir := "stacks"
 	ymlStacks := make(map[string]string) // stackName -> filePath
 
-	entries, err := os.ReadDir(stacksDir)
+	entries, err := os.ReadDir(StacksDir)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("failed to read stacks directory: %w", err)
 	}
@@ -107,7 +106,7 @@ func getStacksList() ([]Stack, error) {
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".yml") && !strings.HasSuffix(entry.Name(), ".effective.yml") {
 				stackName := strings.TrimSuffix(entry.Name(), ".yml")
-				ymlStacks[stackName] = filepath.Join(stacksDir, entry.Name())
+				ymlStacks[stackName] = filepath.Join(StacksDir, entry.Name())
 			}
 		}
 	}
@@ -214,18 +213,13 @@ func streamCommandOutput(w http.ResponseWriter, cmd *exec.Cmd) error {
 
 // HandleListStacks handles GET /api/stacks
 // Returns a combined list of running stacks from Docker and available YAML files
-func HandleListStacks(w http.ResponseWriter, r *http.Request) {
+func HandleListStacks() {
 	stacks, err := getStacksList()
 	if err != nil {
 		log.Printf("Error getting stacks list: %v", err)
-		http.Error(w, "Failed to get stacks", http.StatusInternalServerError)
 		return
 	}
-
-	// Return the combined list
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(stacks)
+	json.NewEncoder(os.Stdout).Encode(stacks)
 }
 
 // createSimulatedContainers creates simulated container objects from a docker-compose.yml file
