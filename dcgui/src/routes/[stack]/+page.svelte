@@ -1,6 +1,7 @@
 <script>
   import YamlEditor from "$lib/YamlEditor.svelte";
   import StackSideMenu from "$lib/StackSideMenu.svelte";
+  import SecretSideMenu from "$lib/SecretSideMenu.svelte";
   import { page } from "$app/stores";
 
   let selectedStack = $state("");
@@ -19,5 +20,6 @@
   <div class="flex flex-row w-full h-full gap-1">
     <StackSideMenu />
     <YamlEditor {selectedStack} />
+    <SecretSideMenu />
   </div>
 </main>

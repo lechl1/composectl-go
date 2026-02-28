@@ -38,7 +38,7 @@ if [ $# -lt 2 ] && [ "$1" != "ls" ] && [ "$1" != "list" ]; then
 fi
 
 cmd=$1
-key=$2
+
 
 ensure_store() {
   if [ ! -f "$PW_FILE" ]; then
@@ -123,17 +123,17 @@ generate_password() {
 case "$cmd" in
   gen)
     # fail if key already exists
-    if key_exists "$key"; then
+    if key_exists "$2"; then
       echo "key already exists" >&2
       exit 1
     fi
     pw=$(generate_password)
-    write_key "$key" "$pw"
+    write_key "$2" "$pw"
     ;;
 
   ins)
     # fail if key already exists
-    if key_exists "$key"; then
+    if key_exists "$2"; then
       echo "key already exists" >&2
       exit 1
     fi
@@ -148,12 +148,12 @@ case "$cmd" in
       echo "empty password from stdin" >&2
       exit 2
     fi
-    write_key "$key" "$val"
+    write_key "$2" "$val"
     ;;
 
   upd)
     # only allow update if key exists
-    if ! key_exists "$key"; then
+    if ! key_exists "$2"; then
       echo "key not found" >&2
       exit 1
     fi
@@ -167,7 +167,7 @@ case "$cmd" in
       echo "empty password from stdin" >&2
       exit 2
     fi
-    write_key "$key" "$val"
+    write_key "$2" "$val"
     ;;
 
   ups)
@@ -185,12 +185,12 @@ case "$cmd" in
 
     if [ "$generate_pw" = true ]; then
       pw=$(generate_password)
-      write_key "$key" "$pw"
+      write_key "$2" "$pw"
       # print generated password
       printf "%s" "$pw"
     else
       # write provided password (upsert)
-      write_key "$key" "$val"
+      write_key "$2" "$val"
     fi
     ;;
 
@@ -211,7 +211,7 @@ case "$cmd" in
     ;;
 
   del)
-    if remove_key "$key"; then
+    if remove_key "$2"; then
       exit 0
     else
       echo "key not found" >&2

@@ -16,6 +16,8 @@ func RegisterHTTPHandlers() {
 	http.HandleFunc("/api/thumbnail", JwtAuthMiddleware(HandleThumbnail))
 	http.HandleFunc("/api/stacks", JwtAuthMiddleware(HandleStackAPI))
 	http.HandleFunc("/api/stacks/", JwtAuthMiddleware(HandleStackAPI))
+	http.HandleFunc("/api/secrets", JwtAuthMiddleware(HandleSecretAPI))
+	http.HandleFunc("/api/secrets/", JwtAuthMiddleware(HandleSecretAPI))
 }
 
 // HandleStackAPI routes stack API requests to appropriate handlers
@@ -86,6 +88,35 @@ func HandleStackAPI(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		http.Error(w, "Not found "+path, http.StatusNotFound)
+	}
+}
+
+// HandleSecretAPI routes secret API requests to appropriate handlers
+func HandleSecretAPI(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	path = strings.TrimPrefix(path, "/api/secrets")
+	path = strings.TrimPrefix(path, "/")
+
+	if path == "" {
+		if r.Method == http.MethodGet {
+			HandleAction(w, "dc", "secret", "ls")
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	// path is now the key name
+	key := path
+	switch r.Method {
+	case http.MethodGet:
+		HandleAction(w, "dc", "secret", "get", key)
+	case http.MethodPut:
+		HandleActionWithStdin(w, r.Body, "dc", "secret", "ups", key)
+	case http.MethodDelete:
+		HandleAction(w, "dc", "secret", "del", key)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
